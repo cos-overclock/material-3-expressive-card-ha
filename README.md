@@ -7,9 +7,13 @@
 ```sh
 npm install
 npm run dev     # プレビュー（モックの HA）を http://localhost:5173/preview/ で開く
-npm test        # 単体テスト（表示の書式・集計・ゴミ出しの曜日・エネルギーの按分など）
+npm test        # テスト（表示の書式・集計などの単体テストと、カードの操作テスト）
 npm run build   # 型チェックとテストのあと、dist/material-3-expressive-card.js を作る
 ```
+
+カードの操作テスト（`tests/cards/`、`tests/components/`）は happy-dom の上でカードを表示し、設定の変更、通信の失敗、キーボード操作を確かめます。プルリクエストと `main` への push では、GitHub Actions（`.github/workflows/ci.yml`）が型チェック、テスト、ビルドを実行し、バンドルのサイズをジョブの概要に書き出します。
+
+プレビューのツールバーの「通信失敗」にチェックを入れる（または URL に `?offline` を付ける）と、履歴・統計・予定・予報の読み込みが失敗します。失敗の表示と［再試行］を確かめるときに使います。
 
 ### Home Assistant への組み込み
 
@@ -843,10 +847,10 @@ src/
   theme/       Latte / Mocha と14色のアクセント
   editor/      HA の編集画面（カードのフォーム＋アクセントカラーの色見本）
   icons/       デザインから抽出したアイコン（scripts/extract-icons.mjs で生成）
-  components/  m3e-shape, m3e-switch, m3e-slider, m3e-button-group, m3e-wavy-progress, m3e-rolling-text, m3e-icon, m3e-line-chart, m3e-keypad
-  ha/          HA との接続（履歴・エネルギー統計・天気予報・集計・表示用の文言、ゴミ出しの規則・時間の書式）
+  components/  m3e-shape, m3e-switch, m3e-slider, m3e-button-group, m3e-wavy-progress, m3e-rolling-text, m3e-icon, m3e-line-chart, m3e-keypad, m3e-fetch-status
+  ha/          HA との接続（履歴・エネルギー統計・天気予報・取得状態・集計・表示用の文言、ゴミ出しの規則・時間の書式）
   cards/       各カード（共通処理は base-card.ts、複数の操作部を持つカードの共通スタイルは shared-styles.ts）
 preview/       モックの HA を使ったプレビュー（editor.html は編集画面の確認用）
-tests/         単体テスト（vitest）
+tests/         テスト（vitest。cards/ と components/ は happy-dom でのカード操作テスト、helpers/ はその補助）
 themes/        HA テーマ
 ```

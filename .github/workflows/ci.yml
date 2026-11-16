@@ -1,0 +1,41 @@
+# Every pull request and every push to main: type-check, run the tests (helpers and card
+# interactions in happy-dom), build the bundle, and write its size to the job summary.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx vite build
+      - name: Bundle size
+        run: |
+          f=dist/material-3-expressive-card.js
+          raw=$(stat -c %s "$f")
+          gz=$(gzip -9 -c "$f" | wc -c)
+          {
+            echo "### Bundle size"
+            echo
+            echo "| file | raw | gzip |"
+            echo "|---|---:|---:|"
+            printf '| %s | %s kB | %s kB |\n' "$(basename "$f")" "$(awk "BEGIN{printf \"%.1f\", $raw/1000}")" "$(awk "BEGIN{printf \"%.1f\", $gz/1000}")"
+          } >> "$GITHUB_STEP_SUMMARY"
