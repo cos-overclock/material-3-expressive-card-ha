@@ -513,8 +513,12 @@ type: custom:m3e-sensor-card
 entity: sensor.living_temperature
 name: リビングの室温
 layout: full        # full（グラフと最高・最低・平均）| compact（値と小さな折れ線、2行ぶん）
-hours: 24
+hours: 24           # 最初に表示する期間（時間）
+periods: [6, 24, 168]   # 切り替えボタンの期間（時間）。省略時は 6時間・24時間・7日
+# show_period_selector: false   # 切り替えボタンを出さない
 ```
+
+`full` では、グラフの上のボタンで期間を切り替えられます。48時間以上で24の倍数の期間は「7日」のように日数で表示し、グラフの目盛りも日付になります。ボタンは矢印キーでも選べます。選んだ期間はその画面を開いているあいだだけ有効で、設定には書き戻しません（読み込み直すと `hours` に戻ります）。`hours` が `periods` にないときは、ボタンに加えます。
 
 `compact` では、`levels` で値に応じたチップを出せます。CO₂ センサー（`device_class: carbon_dioxide`）は、指定がなくても「良好（1000 ppm 未満）・やや高い・換気を」を出します。
 

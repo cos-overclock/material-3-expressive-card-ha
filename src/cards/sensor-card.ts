@@ -13,6 +13,7 @@ import '../components/m3e-shape';
 import '../components/m3e-icon';
 import '../components/m3e-line-chart';
 import '../components/m3e-rolling-text';
+import '../components/m3e-button-group';
 import { statusPhrase } from '../components/m3e-fetch-status';
 
 export interface SensorLevel {
@@ -36,9 +37,62 @@ export interface SensorCardConfig extends BaseCardConfig {
   levels?: SensorLevel[];
   /** Show the min / max / mean tiles (full layout). Default true. */
   show_stats?: boolean;
+  /** Periods (hours) the full layout can switch between. Default [6, 24, 168]; `hours` is added when missing. */
+  periods?: (number | string)[];
+  /** Show the period buttons (full layout). Default true. */
+  show_period_selector?: boolean;
 }
 
-const SAMPLES = 48;
+export const DEFAULT_PERIODS = [6, 24, 168];
+
+/** "6時間", "24時間", "7日" for a period button. */
+export function periodLabel(hours: number): string {
+  return hours >= 48 && hours % 24 === 0 ? `${hours / 24}日` : `${hours}時間`;
+}
+
+/** The time under the finger: with the date once the chart spans more than a day. */
+function scrubTime(at: number, hours: number): string {
+  const d = new Date(at);
+  return hours > 24 ? `${d.getMonth() + 1}/${d.getDate()} ${hhmm(d)}` : hhmm(d);
+}
+
+/** `periods`: hours from 1 to 8760 (the editor writes them as strings). */
+function checkPeriods(c: Record<string, unknown>): Issue[] {
+  const list = c.periods;
+  if (list === undefined) return [];
+  if (!Array.isArray(list)) {
+    return [{ path: 'periods', level: 'error', message: 'periods must be a list of hours', hint: '切り替える期間は時間のリストで書いてください（例：[6, 24, 168]）' }];
+  }
+  const out: Issue[] = [];
+  list.forEach((h, i) => {
+    const n = typeof h === 'string' && h.trim() !== '' ? Number(h) : h;
+    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0 || n > 8760) {
+      out.push({
+        path: `periods.${i}`,
+        level: 'error',
+        message: `periods.${i} must be a number of hours from 1 to 8760`,
+        hint: `切り替える期間 ${i + 1} は1〜8760の時間数にしてください（いまは ${JSON.stringify(h)}）`,
+      });
+    }
+  });
+  return out;
+}
+
+/** "過去24時間", "過去7日間". */
+function pastLabel(hours: number): string {
+  return hours >= 48 && hours % 24 === 0 ? `過去${hours / 24}日間` : `過去${hours}時間`;
+}
+
+/** The period buttons: the configured periods plus `hours`, numbers in range, sorted, no repeats. */
+export function periodOptions(config: Pick<SensorCardConfig, 'hours' | 'periods'>): number[] {
+  const list = [...(config.periods ?? DEFAULT_PERIODS), config.hours ?? 24].map(Number).filter((h) => Number.isFinite(h) && h > 0 && h <= 8760);
+  return [...new Set(list)].sort((a, b) => a - b);
+}
+
+/** Chart buckets: half-hours for a day, two-hour steps for a week, about 90 beyond. */
+function samplesFor(hours: number): number {
+  return hours <= 24 ? 48 : hours <= 168 ? Math.round(hours / 2) : 90;
+}
 const REFRESH_MS = 10 * 60_000;
 
 export const DEVICE: Record<string, { icon: string; accent: Accent; span: number }> = {
@@ -86,6 +140,8 @@ export function sensorLevels(s: HassEntity | undefined, configured?: SensorLevel
 export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   @state() private history: Point[] = [];
   @state() private scrubIndex: number | null = null;
+  /** The period picked with the buttons; back to `hours` when the config changes. */
+  @state() private picked?: number;
   /** Entity and hours of the latest fetch; cleared on disconnect so coming back refetches. */
   private fetchedFor?: string;
   /** Drops late answers, and tells "no history" apart from "couldn't fetch it". */
@@ -142,6 +198,14 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         font: 400 18px / 24px var(--m3e-font-brand);
         color: var(--m3-on-surface-variant);
         letter-spacing: 0;
+      }
+      .periods {
+        --m3e-group-height: 32px;
+        --m3e-group-radius: 10px;
+        --m3e-group-selected-radius: 16px;
+        --m3e-group-gap: 2px;
+        --m3e-group-font-size: 13px;
+        margin-bottom: -4px;
       }
       .chart {
         display: flex;
@@ -268,6 +332,10 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
       :host([compact]) .card:not(.compact) .unit {
         font: 400 15px / 20px var(--m3e-font-brand);
       }
+      :host([compact]) .periods {
+        --m3e-group-height: 30px;
+        --m3e-group-font-size: 12px;
+      }
       :host([compact]) .chart {
         gap: 6px;
       }
@@ -306,7 +374,19 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         { name: 'name', selector: { text: {} } },
         { name: 'icon', selector: { icon: {} } },
         { name: 'layout', selector: { select: { options: ['full', 'compact'] } } },
-        { name: 'hours', selector: { number: { min: 1, max: 168, mode: 'box' } } },
+        { name: 'hours', selector: { number: { min: 1, max: 8760, mode: 'box' } } },
+        {
+          name: 'periods',
+          selector: {
+            select: {
+              multiple: true,
+              custom_value: true,
+              mode: 'list',
+              options: [1, 3, 6, 12, 24, 48, 72, 168, 336, 720].map((h) => ({ value: String(h), label: periodLabel(h) })),
+            },
+          },
+        },
+        { name: 'show_period_selector', selector: { boolean: {} } },
         levelsField(),
         actionsSection(TAP_ACTION_FIELD),
       ],
@@ -320,6 +400,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
       ...checkNumber(c, 'hours', { min: 1, max: 8760, label: 'グラフの時間', unit: '時間' }),
       ...checkNumber(c, 'decimals', { min: 0, max: 6, integer: true, label: '小数点以下の桁数' }),
       ...checkLevels(c),
+      ...checkPeriods(c),
     ];
   }
 
@@ -371,19 +452,32 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     this.fetchedFor = undefined;
   }
 
+  /** The hours on screen: the picked period, else `hours`. */
+  private hours(): number {
+    return this.picked ?? this.config.hours ?? 24;
+  }
+
+  private pick(hours: number): void {
+    if (hours === this.hours()) return;
+    this.picked = hours;
+    this.scrubIndex = null;
+  }
+
   protected override willUpdate(changed: PropertyValues<this>): void {
+    // A new config starts again from its own `hours`.
+    if (changed.has('config' as keyof M3eSensorCard)) this.picked = undefined;
     super.willUpdate(changed);
     // The accent comes from the device class, which needs hass.
     if (changed.has('hass') && !this.config.color) {
       const accent = this.defaultAccent();
       if (this.dataset.accent !== accent) this.dataset.accent = accent;
     }
-    if (changed.has('hass') || changed.has('config' as keyof M3eSensorCard)) this.loadHistory(false);
+    if (changed.has('hass') || changed.has('config' as keyof M3eSensorCard) || changed.has('picked' as keyof M3eSensorCard)) this.loadHistory(false);
   }
 
   private async loadHistory(force: boolean): Promise<void> {
     if (!this.hass || !this.config) return;
-    const key = `${this.config.entity}|${this.config.hours ?? 24}`;
+    const key = `${this.config.entity}|${this.hours()}`;
     if (!force && this.fetchedFor === key) return;
     // Another entity or window: the old history doesn't belong on this chart.
     if (this.fetch.shownKey !== key) this.history = [];
@@ -391,7 +485,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     this.fetchedAt = Date.now();
     const hass = this.hass;
     const entity = this.config.entity;
-    const hours = this.config.hours ?? 24;
+    const hours = this.hours();
     await this.fetch.run(
       key,
       async () => (await fetchHistory(hass, [entity], hours))[entity] ?? [],
@@ -404,10 +498,10 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   /** Bucketed values for the chart, ending with the live state. */
   private series(s: HassEntity | undefined): { values: (number | null)[]; start: number; end: number } {
     const end = Date.now();
-    const start = end - (this.config.hours ?? 24) * 3600_000;
+    const start = end - this.hours() * 3600_000;
     const live = numState(s);
     const pts = live !== undefined ? [...this.history, [end - 1, live] as Point] : this.history;
-    const values = resample(pts, start, end, SAMPLES);
+    const values = resample(pts, start, end, samplesFor(this.hours()));
     if (live !== undefined) values[values.length - 1] = live;
     return { values, start, end };
   }
@@ -439,16 +533,22 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
 
   private axis(start: number, end: number) {
     const hours = (end - start) / 3600_000;
-    const stepH = Math.max(1, Math.round(hours / 4));
-    const first = new Date(start);
-    first.setMinutes(0, 0, 0);
-    let t = first.getTime() + 3600_000;
     const labels: { pos: number; text: string }[] = [];
-    for (; t < end; t += stepH * 3600_000) {
+    const push = (t: number, text: string) => {
       const pos = (t - start) / (end - start);
-      if (pos > 0.86) break;
-      const d = new Date(t);
-      labels.push({ pos, text: hours > 48 ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.getHours()}時` });
+      if (pos <= 0.86) labels.push({ pos, text });
+    };
+    if (hours > 48) {
+      // Days: a label at midnight every few days.
+      const stepD = Math.max(1, Math.round(hours / 24 / 4));
+      const d = new Date(start);
+      d.setHours(24, 0, 0, 0);
+      for (; d.getTime() < end; d.setDate(d.getDate() + stepD)) push(d.getTime(), `${d.getMonth() + 1}/${d.getDate()}`);
+    } else {
+      const stepH = Math.max(1, Math.round(hours / 4));
+      const first = new Date(start);
+      first.setMinutes(0, 0, 0);
+      for (let t = first.getTime() + 3600_000; t < end; t += stepH * 3600_000) push(t, `${new Date(t).getHours()}時`);
     }
     return html`<div class="axis" aria-hidden="true">
       ${labels.map((l, i) => html`<span style="left:${i === 0 && l.pos < 0.06 ? 0 : l.pos * 100}%">${l.text}</span>`)}
@@ -462,8 +562,9 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const nums = values.filter((v): v is number => v !== null);
     const scrubbing = this.scrubIndex !== null && values[this.scrubIndex] != null;
     const shown = scrubbing ? values[this.scrubIndex!] : numState(s);
-    const at = scrubbing ? start + ((this.scrubIndex! + 0.5) / SAMPLES) * (end - start) : 0;
-    const hours = this.config.hours ?? 24;
+    const at = scrubbing ? start + ((this.scrubIndex! + 0.5) / values.length) * (end - start) : 0;
+    const hours = this.hours();
+    const periods = periodOptions(this.config);
     const dc = s?.attributes.device_class as string | undefined;
     const short = this.shortUnit(s);
     return html`<div class="card ${isUnavailable(s) ? 'unavailable' : ''}">
@@ -473,12 +574,21 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         </m3e-shape>
         <div class="text" @click=${() => this.tapEntity(this.config.entity)}>
           <p class="name">${name}</p>
-          <p class="sub">${scrubbing ? `${hhmm(at)} ごろ` : [`過去${hours}時間`, statusPhrase(this.fetch.view, '履歴なし')].filter(Boolean).join('・')}</p>
+          <p class="sub">${scrubbing ? `${scrubTime(at, hours)} ごろ` : [pastLabel(hours), statusPhrase(this.fetch.view, '履歴なし')].filter(Boolean).join('・')}</p>
         </div>
         <div class="value">
           <m3e-rolling-text .text=${this.fmt(shown, s)}></m3e-rolling-text><span class="unit">${this.unit(s)}</span>
         </div>
       </div>
+      ${this.config.show_period_selector === false || periods.length < 2
+        ? nothing
+        : html`<m3e-button-group
+            class="periods"
+            label="グラフの期間"
+            .options=${periods.map((h) => ({ value: String(h), label: periodLabel(h), ariaLabel: pastLabel(h) }))}
+            .value=${String(hours)}
+            @select=${(e: CustomEvent<{ value: string }>) => this.pick(Number(e.detail.value))}
+          ></m3e-button-group>`}
       <div class="chart">
         <m3e-line-chart
           .values=${values}

@@ -89,6 +89,8 @@ const COMMON_LABELS: Record<string, string> = {
   scenes: 'シーン',
   active_hours: '実行済みとして色を付ける時間',
   hours: 'グラフの時間（時間）',
+  periods: '切り替えられる期間（時間）',
+  show_period_selector: '期間の切り替えボタン',
   levels: '値の段階',
   show_switch: 'スイッチを表示',
   secondary_entity: '状態の行に添える値',
