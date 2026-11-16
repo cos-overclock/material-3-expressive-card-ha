@@ -440,6 +440,8 @@ export class MockHass {
   darkMode = false;
   /** Simulated device latency. */
   latency = 100;
+  /** Simulated outage: history, statistics, calendars, to-do lists and forecasts fail to load. */
+  offline = false;
 
   constructor() {
     for (const e of initialStates()) this.states[e.entity_id] = e;
@@ -535,11 +537,13 @@ export class MockHass {
       },
       callApi: async <T,>(method: string, path: string): Promise<T> => {
         await new Promise((r) => setTimeout(r, 150));
+        if (this.offline) throw new Error('mock: offline');
         if (method === 'GET' && path.startsWith('calendars/')) return mockCalendar(path) as T;
         throw new Error(`mock: ${method} ${path} not implemented`);
       },
       callWS: async <T,>(msg: Record<string, unknown>): Promise<T> => {
         await new Promise((r) => setTimeout(r, 150));
+        if (this.offline) throw new Error('mock: offline');
         if (msg.type === 'history/history_during_period') return mockHistory(msg) as T;
         if (msg.type === 'energy/get_prefs') return ENERGY_PREFS as T;
         if (msg.type === 'todo/item/list') return { items: this.todo.map((i) => ({ ...i })) } as T;
@@ -548,6 +552,10 @@ export class MockHass {
       },
       connection: {
         subscribeMessage: async <T,>(cb: (msg: T) => void, msg: Record<string, unknown>) => {
+          if (this.offline) {
+            await new Promise((r) => setTimeout(r, 150));
+            throw new Error('mock: offline');
+          }
           if (msg.type === 'weather/subscribe_forecast') {
             const hourly = msg.forecast_type === 'hourly';
             setTimeout(() => cb({ type: msg.forecast_type, forecast: hourly ? HOURLY : FORECAST } as T), 200);

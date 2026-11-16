@@ -9,6 +9,7 @@ import type { Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
+import '../components/m3e-fetch-status';
 
 export interface WeatherCardConfig extends BaseCardConfig {
   /** weather.* */
@@ -39,10 +40,15 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
 
   @state() private daily: Forecast[] = [];
   @state() private hourly: Forecast[] = [];
-  private forecasts = new ForecastSubscriptions((type, list) => {
-    if (type === 'hourly') this.hourly = list;
-    else this.daily = list;
-  });
+  private forecasts = new ForecastSubscriptions(
+    (type, list) => {
+      if (type === 'hourly') this.hourly = list;
+      else this.daily = list;
+    },
+    () => this.requestUpdate(),
+  );
+  /** Entity whose forecasts are on screen. */
+  private forecastFor?: string;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -168,11 +174,6 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
           animation: none;
         }
       }
-      .empty {
-        font: 400 13px / 20px var(--m3e-font-plain);
-        color: var(--m3-on-surface-variant);
-      }
-
       /* ---- compact density (phones and tablets) ---- */
       :host([compact]) .card {
         padding: 16px;
@@ -247,13 +248,29 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
     this.forecasts.stop();
   }
 
-  protected override updated(changed: PropertyValues<this>): void {
-    super.updated(changed);
+  private forecastTypes(): ForecastType[] {
     const types: ForecastType[] = [];
     if (this.config.show_daily !== false) types.push('daily');
     if (this.config.show_hourly !== false) types.push('hourly');
-    this.forecasts.sync(this.hass, this.config.entity, types);
+    return types;
   }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    super.willUpdate(changed);
+    // Another weather entity: its forecasts replace the old ones, which must not stay up meanwhile.
+    if (this.forecastFor !== this.config.entity) {
+      this.forecastFor = this.config.entity;
+      this.daily = [];
+      this.hourly = [];
+    }
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    super.updated(changed);
+    this.forecasts.sync(this.hass, this.config.entity, this.forecastTypes());
+  }
+
+  private readonly retry = () => this.forecasts.retry(this.hass, this.config.entity, this.forecastTypes());
 
   private renderHours() {
     const list = upcoming(this.hourly, this.clockNow).slice(0, this.config.hours ?? 12);
@@ -329,7 +346,17 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
         </div>
       </div>
       ${showHourly ? this.renderHours() : nothing} ${showDaily ? this.renderDays() : nothing}
-      ${(showHourly || showDaily) && !this.hourly.length && !this.daily.length ? html`<p class="empty">予報を読み込んでいます…</p>` : nothing}
+      ${showHourly || showDaily
+        ? html`<m3e-fetch-status
+            .view=${{
+              status: this.forecasts.status,
+              updatedAt: this.forecasts.updatedAt,
+              hasData: this.hourly.length + this.daily.length > 0,
+            }}
+            subject="予報"
+            @retry=${this.retry}
+          ></m3e-fetch-status>`
+        : nothing}
     </div>`;
   }
 }

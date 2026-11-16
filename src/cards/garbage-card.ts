@@ -4,11 +4,13 @@ import { M3eBaseCard, type BaseCardConfig } from './base-card';
 import { field, listOf } from '../editor/form-helpers';
 import { isActive } from '../ha/helpers';
 import { DAYS, ruleHits, ymd, type Rule } from '../ha/garbage-rules';
+import { FetchTracker } from '../ha/fetch-state';
 import type { LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
+import '../components/m3e-fetch-status';
 
 const WEEK_OPTIONS = ['1', '2', '3', '4', '5'].map((w) => ({ value: w, label: '第' + w }));
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'];
@@ -63,6 +65,7 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
   @state() private localDone = '';
   @state() private pressed = false;
   private loadedAt = 0;
+  private readonly fetch = new FetchTracker<Collection[]>(this, { label: 'm3e-garbage-card' });
 
   static override styles = [
     M3eBaseCard.styles,
@@ -312,17 +315,30 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
-    if (this.config.calendar && this.hass?.callApi && Date.now() - this.loadedAt > 3600_000) this.loadCalendar();
+    const cal = this.config.calendar;
+    if (!cal) {
+      if (this.fetch.status !== 'idle') {
+        this.fetch.reset();
+        this.calendarDays = [];
+      }
+    } else if (this.hass?.callApi && (cal !== this.fetch.key || Date.now() - this.loadedAt > 3600_000)) this.loadCalendar();
   }
 
+  private readonly retry = () => this.loadCalendar();
+
   private async loadCalendar(): Promise<void> {
+    const hass = this.hass;
+    const cal = this.config.calendar;
+    if (!hass?.callApi || !cal) return;
+    // Another calendar: its days must not stay on screen.
+    if (this.fetch.shownKey !== cal) this.calendarDays = [];
     this.loadedAt = Date.now();
     const start = dayStart(new Date());
     const end = new Date(start.getTime() + 45 * 86400_000);
-    try {
-      const events = await this.hass!.callApi!<{ summary: string; start: { date?: string; dateTime?: string } }[]>(
+    await this.fetch.run(cal, async () => {
+      const events = await hass.callApi!<{ summary: string; start: { date?: string; dateTime?: string } }[]>(
         'GET',
-        `calendars/${this.config.calendar}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`,
+        `calendars/${cal}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`,
       );
       const byDay = new Map<string, Collection>();
       for (const e of events) {
@@ -334,10 +350,8 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
         if (!c.types.includes(e.summary)) c.types.push(e.summary);
         byDay.set(key, c);
       }
-      this.calendarDays = [...byDay.values()];
-    } catch (e) {
-      console.warn('m3e-garbage-card: calendar unavailable', e);
-    }
+      return [...byDay.values()];
+    }, (days) => (this.calendarDays = days));
   }
 
   /** Collection days from today on, rules and calendar merged. */
@@ -437,7 +451,9 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
               ${done ? '取り消す' : html`<m3e-icon icon="check"></m3e-icon>出した`}
             </button>
           </div>`
-        : html`<p class="empty">予定されている収集日はありません</p>`}
+        : this.fetch.status === 'error' && !this.fetch.view.hasData
+          ? nothing
+          : html`<p class="empty">予定されている収集日はありません</p>`}
       ${rest.length
         ? html`<div class="list">
             ${rest.map(
@@ -448,6 +464,9 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
           </div>`
         : nothing}
       ${this.config.note ? html`<p class="note"><m3e-icon icon="notifications-active"></m3e-icon>${this.config.note}</p>` : nothing}
+      ${this.config.calendar
+        ? html`<m3e-fetch-status .view=${this.fetch.view} subject="カレンダー" emptyText="" @retry=${this.retry}></m3e-fetch-status>`
+        : nothing}
     </div>`;
   }
 }

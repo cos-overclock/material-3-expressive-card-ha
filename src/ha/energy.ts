@@ -102,6 +102,20 @@ export function mergeSources(base: EnergySources | undefined, override: Partial<
   };
 }
 
+/**
+ * The energy settings with the config's overrides on top. Throws when HA's
+ * settings couldn't be read and the config names no source of its own, so a
+ * card can show "couldn't fetch" instead of an empty chart.
+ */
+export async function loadSources(
+  hass: HomeAssistant,
+  override: Partial<Record<keyof EnergySources, unknown>> | undefined,
+): Promise<EnergySources> {
+  const base = await energySources(hass);
+  if (!base && !Object.values(override ?? {}).some((v) => v !== undefined)) throw new Error('energy settings unavailable');
+  return mergeSources(base, override);
+}
+
 export const allStats = (s: EnergySources) => [
   ...new Set([...s.grid_in, ...s.grid_out, ...s.solar, ...s.battery_in, ...s.battery_out, ...s.devices.map((d) => d.stat)]),
 ];

@@ -463,6 +463,13 @@ latency.addEventListener('input', () => {
   document.getElementById('latency-value')!.textContent = `${latency.value}ms`;
 });
 
+// Simulated outage: ?offline (or the toolbar checkbox) makes data fetches fail, to check the
+// error rows and their retry buttons. The energy settings are cached, so turn it on before loading.
+const offline = document.getElementById('offline') as HTMLInputElement;
+offline.checked = new URLSearchParams(location.search).has('offline');
+hass.offline = offline.checked;
+offline.addEventListener('change', () => (hass.offline = offline.checked));
+
 // Card layout: ?cols=1 renders a single phone-width column.
 const cols = new URLSearchParams(location.search).get('cols');
 if (cols) root.style.setProperty('--section-count', cols);

@@ -4,11 +4,13 @@ import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
 import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { hhmm } from '../ha/helpers';
+import { FetchTracker } from '../ha/fetch-state';
 import type { LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { SPRINGS, prefersReducedMotion, springTransition } from '../motion/spring';
 import { define } from '../components/define';
 import '../components/m3e-icon';
+import '../components/m3e-fetch-status';
 
 interface CalendarRef {
   entity: string;
@@ -73,12 +75,11 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   @state() private pending = new Set<string>();
   @state() private todoError = '';
   private eventsAt = 0;
-  /** Calendars and days of the latest event fetch, and of the events on screen. */
+  /** Calendars and days of the latest event fetch. */
   private eventsFor?: string;
-  private eventsShown?: string;
-  private eventsSeq = 0;
+  private readonly eventsFetch = new FetchTracker<CalEvent[]>(this, { label: 'm3e-agenda-card (calendars)' });
   private todoState?: string;
-  private todoSeq = 0;
+  private readonly todoFetch = new FetchTracker<TodoItem[]>(this, { label: 'm3e-agenda-card (to-do)' });
   private errorTimer?: ReturnType<typeof setTimeout>;
   private positions = new Map<string, number>();
 
@@ -246,6 +247,9 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
         --m3e-icon-size: 18px;
         flex: none;
       }
+      m3e-fetch-status {
+        margin-top: 8px;
+      }
       .add {
         display: flex;
         align-items: center;
@@ -389,6 +393,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
     // Other calendars or days: fetch now, not at the next REFRESH_MS.
     const eventsKey = this.eventsKey();
     if (this.cals().length && (eventsKey !== this.eventsFor || Date.now() - this.eventsAt > REFRESH_MS)) this.loadEvents(eventsKey);
+    else if (!this.cals().length && this.eventsFetch.status !== 'idle') this.eventsFetch.reset();
     // A to-do entity's state is its open-item count: refetch when it changes.
     const todo = this.config.todo;
     const t = todo ? this.stateObj(todo) : undefined;
@@ -402,6 +407,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
       }
       this.todoState = key;
       if (todo) this.loadTodo(todo);
+      else this.todoFetch.reset();
     }
     // FLIP: remember where each item is before it moves.
     if ((changed as Map<string, unknown>).has('items')) {
@@ -433,62 +439,64 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   /** Fetch the events for `key`. A response overtaken by a newer fetch is dropped. */
   private async loadEvents(key: string): Promise<void> {
     if (!this.hass?.callApi) return;
-    const seq = ++this.eventsSeq;
+    // Don't leave the previous calendars' events up as if they were these.
+    if (this.eventsFetch.shownKey !== key) this.events = [];
     this.eventsFor = key;
     this.eventsAt = Date.now();
     const start = dayStart(new Date());
     const end = new Date(start.getTime() + (this.config.days ?? 2) * 86400_000);
     const q = `start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
-    try {
-      const lists = await Promise.all(
-        this.cals().map(async (cal) => {
-          const raw = await this.hass!.callApi!<
-            { uid?: string; summary: string; location?: string; start: { date?: string; dateTime?: string }; end?: { date?: string; dateTime?: string } }[]
-          >('GET', `calendars/${cal.entity}?${q}`);
-          return raw.map((e, i): CalEvent => {
-            const allDay = !!e.start.date;
-            return {
-              key: `${cal.entity}:${e.uid ?? i}:${e.start.date ?? e.start.dateTime}`,
-              summary: e.summary,
-              location: e.location || undefined,
-              allDay,
-              start: allDay ? new Date(`${e.start.date}T00:00:00`) : new Date(e.start.dateTime!),
-              end: e.end?.dateTime ? new Date(e.end.dateTime) : undefined,
-              cal,
-            };
-          });
-        }),
-      );
-      if (seq !== this.eventsSeq) return;
-      this.events = lists.flat().sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.getTime() - b.start.getTime());
-      this.eventsShown = key;
-    } catch (e) {
-      if (seq !== this.eventsSeq) return;
-      console.warn('m3e-agenda-card: calendars unavailable', e);
-      // Don't leave the previous calendars' events up as if they were these.
-      if (this.eventsShown !== key) {
-        this.events = [];
-        this.eventsShown = key;
-      }
-    }
+    const hass = this.hass;
+    const cals = this.cals();
+    await this.eventsFetch.run(
+      key,
+      async () => {
+        const lists = await Promise.all(
+          cals.map(async (cal) => {
+            const raw = await hass.callApi!<
+              { uid?: string; summary: string; location?: string; start: { date?: string; dateTime?: string }; end?: { date?: string; dateTime?: string } }[]
+            >('GET', `calendars/${cal.entity}?${q}`);
+            return raw.map((e, i): CalEvent => {
+              const allDay = !!e.start.date;
+              return {
+                key: `${cal.entity}:${e.uid ?? i}:${e.start.date ?? e.start.dateTime}`,
+                summary: e.summary,
+                location: e.location || undefined,
+                allDay,
+                start: allDay ? new Date(`${e.start.date}T00:00:00`) : new Date(e.start.dateTime!),
+                end: e.end?.dateTime ? new Date(e.end.dateTime) : undefined,
+                cal,
+              };
+            });
+          }),
+        );
+        return lists.flat().sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.getTime() - b.start.getTime());
+      },
+      (events) => (this.events = events),
+    );
   }
+
+  /** Fetch the events again now (the retry button). */
+  private readonly retryEvents = () => this.loadEvents(this.eventsKey());
+
+  /** Fetch the to-do items again now (the retry button). */
+  private readonly retryTodo = () => this.config.todo && this.loadTodo(this.config.todo);
 
   /** Fetch the items of `todo`. A response overtaken by a newer fetch is dropped. */
   private async loadTodo(todo: string): Promise<void> {
-    if (!this.hass?.callWS) return;
-    const seq = ++this.todoSeq;
-    try {
-      const res = await this.hass.callWS<{ items: TodoItem[] }>({ type: 'todo/item/list', entity_id: todo });
-      if (seq !== this.todoSeq || todo !== this.config.todo) return;
-      // An item still being updated keeps its new status until HA answers.
-      this.items = res.items.map((i) => {
-        const mine = this.pending.has(i.uid) ? this.items.find((x) => x.uid === i.uid) : undefined;
-        return mine ? { ...i, status: mine.status } : i;
-      });
-    } catch (e) {
-      if (seq !== this.todoSeq) return;
-      console.warn('m3e-agenda-card: to-do list unavailable', e);
-    }
+    const hass = this.hass;
+    if (!hass?.callWS) return;
+    await this.todoFetch.run(
+      todo,
+      async () => (await hass.callWS!<{ items: TodoItem[] }>({ type: 'todo/item/list', entity_id: todo })).items,
+      (items) => {
+        // An item still being updated keeps its new status until HA answers.
+        this.items = items.map((i) => {
+          const mine = this.pending.has(i.uid) ? this.items.find((x) => x.uid === i.uid) : undefined;
+          return mine ? { ...i, status: mine.status } : i;
+        });
+      },
+    );
   }
 
   private setPending(uid: string, on: boolean): void {
@@ -568,8 +576,11 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
     const days = this.config.days ?? 2;
     return html`<div class="head">
         <span class="title">${this.config.title ?? (days === 1 ? '今日の予定' : days === 2 ? '今日と明日の予定' : `${days}日間の予定`)}</span>
-        <span class="meta">${list.length}件</span>
+        ${this.eventsFetch.view.hasData ? html`<span class="meta">${list.length}件</span>` : nothing}
       </div>
+      ${list.length || !this.eventsFetch.view.hasData
+        ? nothing
+        : html`<p class="empty">予定はありません</p>`}
       ${list.length
         ? html`<div class="events">
             ${repeat(
@@ -585,7 +596,14 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
               </div>`,
             )}
           </div>`
-        : html`<p class="empty">予定はありません</p>`}`;
+        : nothing}
+      <m3e-fetch-status
+        class="fetch"
+        .view=${this.eventsFetch.view}
+        subject="予定"
+        emptyText=""
+        @retry=${this.retryEvents}
+      ></m3e-fetch-status>`;
   }
 
   private renderTodo() {
@@ -594,7 +612,9 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
     const name = this.config.todo_title ?? (this.stateObj(this.config.todo)?.attributes.friendly_name as string) ?? '買い物リスト';
     return html`<div class="head">
         <span class="title">${name}</span>
-        <span class="meta">${open.length ? `残り ${open.length}件` : 'すべて完了'}</span>
+        ${this.todoFetch.view.hasData || this.items.length
+          ? html`<span class="meta">${open.length ? `残り ${open.length}件` : 'すべて完了'}</span>`
+          : nothing}
       </div>
       <div class="todo" role="list">
         ${repeat(
@@ -615,6 +635,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
           </div>`,
         )}
       </div>
+      <m3e-fetch-status only-errors .view=${this.todoFetch.view} subject="リスト" @retry=${this.retryTodo}></m3e-fetch-status>
       ${this.todoError ? html`<p class="error" role="alert"><m3e-icon icon="error"></m3e-icon>${this.todoError}</p>` : nothing}
       ${this.config.hide_add
         ? nothing

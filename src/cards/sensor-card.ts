@@ -3,6 +3,7 @@ import { state } from 'lit/decorators.js';
 import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { levelsField } from '../editor/form-helpers';
 import { fetchHistory, resample, type Point } from '../ha/history';
+import { FetchTracker } from '../ha/fetch-state';
 import { hhmm, isUnavailable, numState } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -11,6 +12,7 @@ import '../components/m3e-shape';
 import '../components/m3e-icon';
 import '../components/m3e-line-chart';
 import '../components/m3e-rolling-text';
+import { statusPhrase } from '../components/m3e-fetch-status';
 
 export interface SensorLevel {
   /** Upper bound (exclusive). Omit on the last level. */
@@ -83,11 +85,10 @@ export function sensorLevels(s: HassEntity | undefined, configured?: SensorLevel
 export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   @state() private history: Point[] = [];
   @state() private scrubIndex: number | null = null;
+  /** Entity and hours of the latest fetch; cleared on disconnect so coming back refetches. */
   private fetchedFor?: string;
-  /** Entity and hours the history on screen belongs to. */
-  private historyFor?: string;
-  /** Bumped by every fetch, so a late answer to an earlier one is dropped. */
-  private fetchSeq = 0;
+  /** Drops late answers, and tells "no history" apart from "couldn't fetch it". */
+  private readonly fetch = new FetchTracker<Point[]>(this, { label: 'm3e-sensor-card' });
   private refreshTimer?: ReturnType<typeof setInterval>;
   private fetchedAt = 0;
 
@@ -374,23 +375,20 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const key = `${this.config.entity}|${this.config.hours ?? 24}`;
     if (!force && this.fetchedFor === key) return;
     // Another entity or window: the old history doesn't belong on this chart.
-    if (this.historyFor !== key) {
-      this.history = [];
-      this.historyFor = key;
-    }
+    if (this.fetch.shownKey !== key) this.history = [];
     this.fetchedFor = key;
     this.fetchedAt = Date.now();
-    const seq = ++this.fetchSeq;
+    const hass = this.hass;
     const entity = this.config.entity;
-    try {
-      const res = await fetchHistory(this.hass, [entity], this.config.hours ?? 24);
-      if (seq !== this.fetchSeq) return;
-      this.history = res[entity] ?? [];
-    } catch (e) {
-      if (seq !== this.fetchSeq) return;
-      console.warn('m3e-sensor-card: history unavailable', e);
-    }
+    const hours = this.config.hours ?? 24;
+    await this.fetch.run(
+      key,
+      async () => (await fetchHistory(hass, [entity], hours))[entity] ?? [],
+      (points) => (this.history = points),
+    );
   }
+
+  private readonly retry = () => this.loadHistory(true);
 
   /** Bucketed values for the chart, ending with the live state. */
   private series(s: HassEntity | undefined): { values: (number | null)[]; start: number; end: number } {
@@ -464,7 +462,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         </m3e-shape>
         <div class="text" @click=${() => this.tapEntity(this.config.entity)}>
           <p class="name">${name}</p>
-          <p class="sub">${scrubbing ? `${hhmm(at)} ごろ` : `過去${hours}時間`}</p>
+          <p class="sub">${scrubbing ? `${hhmm(at)} ごろ` : [`過去${hours}時間`, statusPhrase(this.fetch.view, '履歴なし')].filter(Boolean).join('・')}</p>
         </div>
         <div class="value">
           <m3e-rolling-text .text=${this.fmt(shown, s)}></m3e-rolling-text><span class="unit">${this.unit(s)}</span>
@@ -481,8 +479,9 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
           @scrub=${(e: CustomEvent) => (this.scrubIndex = e.detail.index)}
         ></m3e-line-chart>
         ${this.axis(start, end)}
+        <m3e-fetch-status only-errors .view=${this.fetch.view} subject="履歴" @retry=${this.retry}></m3e-fetch-status>
       </div>
-      ${this.config.show_stats === false || !nums.length
+      ${this.config.show_stats === false || !nums.length || !this.history.length
         ? nothing
         : html`<div class="stats">
             <div class="stat hi"><p class="k">最高</p><p class="v">${this.fmt(Math.max(...nums), s)}${short}</p></div>
@@ -503,6 +502,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         <m3e-icon .icon=${this.icon(s)}></m3e-icon>
         <span class="label">${name}</span>
         ${level ? html`<span class="chip" data-accent=${level.color ?? 'green'}>${level.label}</span>` : nothing}
+        <m3e-fetch-status variant="icon" .view=${this.fetch.view} subject="履歴" @retry=${this.retry}></m3e-fetch-status>
       </div>
       <div class="value">
         <m3e-rolling-text .text=${this.fmt(v, s)}></m3e-rolling-text><span class="unit">${this.unit(s)}</span>

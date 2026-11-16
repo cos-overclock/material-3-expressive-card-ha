@@ -3,8 +3,9 @@ import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
 import { field, listOf } from '../editor/form-helpers';
 import { areaName } from '../ha/helpers';
-import { addSeries, energySources, flows, kwh, mergeSources, range, statChanges, sum } from '../ha/energy';
-import type { LovelaceGridOptions } from '../ha/types';
+import { addSeries, flows, kwh, loadSources, range, statChanges, sum } from '../ha/energy';
+import { FetchTracker, type FetchView } from '../ha/fetch-state';
+import type { HomeAssistant, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { SPRINGS, SpringValue } from '../motion/spring';
 import { define } from '../components/define';
@@ -12,6 +13,7 @@ import type { GroupOption } from '../components/m3e-button-group';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
 import '../components/m3e-button-group';
+import '../components/m3e-fetch-status';
 
 interface AreaConfig {
   name: string;
@@ -163,7 +165,12 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
   });
   private cache = new Map<string, { at: number; model: Model }>();
   private ro?: ResizeObserver;
-  private requested = '';
+  /** When each period was last asked for; a failure waits REFRESH_MS (or the retry button) before asking again. */
+  private attempted = new Map<Kind, number>();
+  private readonly fetch = new FetchTracker<Model>(this, {
+    label: 'm3e-energy-sankey-card',
+    isEmpty: (m) => m.home <= 0 && !m.sources.length,
+  });
 
   static override styles = [
     M3eBaseCard.styles,
@@ -340,13 +347,11 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
     if (!this.hass) return;
-    const cached = this.cache.get(this.period);
-    const key = `${this.period}`;
-    if ((!cached || Date.now() - cached.at > REFRESH_MS) && this.requested !== key) {
-      this.requested = key;
-      this.load(this.period).finally(() => (this.requested = ''));
-    }
+    const last = this.attempted.get(this.period);
+    if ((last === undefined || Date.now() - last > REFRESH_MS) && !this.fetch.isLoading(this.period)) this.load(this.period);
   }
+
+  private readonly retry = () => this.load(this.period);
 
   protected override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
@@ -355,34 +360,47 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
   }
 
   private async load(kind: Kind): Promise<void> {
-    const hass = this.hass!;
-    try {
-      const src = mergeSources(await energySources(hass), { ...this.config.sources });
-      const { start, end, period, buckets } = range(kind);
-      const deviceIds = this.config.areas ? this.config.areas.flatMap((a) => a.devices) : src.devices.map((d) => d.stat);
-      const ids = [...new Set([...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out, ...deviceIds])];
-      const data = await statChanges(hass, ids, start, end, period, buckets);
-      const total = (list: string[]) => sum(addSeries(data, list, buckets));
-      const f = flows({
-        solar: total(src.solar),
-        gridIn: total(src.grid_in),
-        gridOut: total(src.grid_out),
-        batteryIn: total(src.battery_in),
-        batteryOut: total(src.battery_out),
-      });
-      const hasSources = src.solar.length + src.grid_in.length + src.battery_out.length > 0;
-      const deviceTotal = sum(deviceIds.map((id) => sum(data[id] ?? [])));
-      const home = hasSources ? f.home : deviceTotal;
-      const sources = [
-        { key: 'solar', label: '太陽光', color: accentVar('yellow'), value: f.solarToHome },
-        { key: 'battery', label: '蓄電池', color: accentVar('green'), value: f.batteryToHome },
-        { key: 'grid', label: '電力会社', color: accentVar('blue'), value: f.gridToHome },
-      ].filter((s) => s.value > 0.005);
-      this.cache.set(kind, { at: Date.now(), model: { sources, home, areas: this.groupAreas(data, deviceIds, src.devices, home) } });
+    const hass = this.hass;
+    if (!hass) return;
+    this.attempted.set(kind, Date.now());
+    const applied = await this.fetch.run(kind, () => this.fetchModel(hass, kind), (model) => {
+      this.cache.set(kind, { at: Date.now(), model });
       if (kind === this.period) this.show(kind);
-    } catch (e) {
-      console.warn('m3e-energy-sankey-card: statistics unavailable', e);
-    }
+    });
+    // Overtaken by a fetch of another period: ask again when this one is shown.
+    if (!applied && this.fetch.key !== kind) this.attempted.delete(kind);
+  }
+
+  private async fetchModel(hass: HomeAssistant, kind: Kind): Promise<Model> {
+    const src = await loadSources(hass, { ...this.config.sources });
+    const { start, end, period, buckets } = range(kind);
+    const deviceIds = this.config.areas ? this.config.areas.flatMap((a) => a.devices) : src.devices.map((d) => d.stat);
+    const ids = [...new Set([...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out, ...deviceIds])];
+    const data = await statChanges(hass, ids, start, end, period, buckets);
+    const total = (list: string[]) => sum(addSeries(data, list, buckets));
+    const f = flows({
+      solar: total(src.solar),
+      gridIn: total(src.grid_in),
+      gridOut: total(src.grid_out),
+      batteryIn: total(src.battery_in),
+      batteryOut: total(src.battery_out),
+    });
+    const hasSources = src.solar.length + src.grid_in.length + src.battery_out.length > 0;
+    const deviceTotal = sum(deviceIds.map((id) => sum(data[id] ?? [])));
+    const home = hasSources ? f.home : deviceTotal;
+    const sources = [
+      { key: 'solar', label: '太陽光', color: accentVar('yellow'), value: f.solarToHome },
+      { key: 'battery', label: '蓄電池', color: accentVar('green'), value: f.batteryToHome },
+      { key: 'grid', label: '電力会社', color: accentVar('blue'), value: f.gridToHome },
+    ].filter((s) => s.value > 0.005);
+    return { sources, home, areas: this.groupAreas(data, deviceIds, src.devices, home) };
+  }
+
+  /** The status of the period on screen: its fetch, or when its cached data arrived. */
+  private statusView(): FetchView {
+    if (this.fetch.key === this.period) return this.fetch.view;
+    const cached = this.cache.get(this.period);
+    return cached ? { status: 'ok', updatedAt: cached.at, hasData: true } : { status: 'idle', hasData: false };
   }
 
   private groupAreas(
@@ -529,6 +547,14 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
 
   protected renderCard() {
     const l = this.shown;
+    // This period has never loaded and its fetch failed: the chart on screen is another period's.
+    const failed = !this.cache.has(this.period) && this.fetch.key === this.period && this.fetch.status === 'error';
+    const status = html`<m3e-fetch-status
+      .view=${this.statusView()}
+      subject="電力量の記録"
+      emptyText="この期間の記録はまだありません"
+      @retry=${this.retry}
+    ></m3e-fetch-status>`;
     return html`<div class="card">
       <div class="head">
         <m3e-shape shape="cookie9" size=${this.compact ? 36 : 44}><m3e-icon icon="devices"></m3e-icon></m3e-shape>
@@ -544,11 +570,12 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
           @select=${(e: CustomEvent) => this.choose(e.detail.value)}
         ></m3e-button-group>
       </div>
-      ${l
+      ${l && !failed
         ? html`<div class="plot" @click=${(e: Event) => e.target === e.currentTarget && (this.highlight = undefined)}>
-            <svg viewBox="0 0 ${this.width} ${H}" aria-label="エネルギーの使われ方" role="img">${this.renderPlot(l)}</svg>
-          </div>`
-        : html`<div class="plot"><p class="empty">エネルギーの記録を読み込んでいます…</p></div>`}
+              <svg viewBox="0 0 ${this.width} ${H}" aria-label="エネルギーの使われ方" role="img">${this.renderPlot(l)}</svg>
+            </div>
+            ${status}`
+        : html`<div class="plot">${failed ? status : html`<p class="empty">エネルギーの記録を読み込んでいます…</p>`}</div>`}
       ${this.config.footnote === ''
         ? nothing
         : html`<p class="foot">${this.config.footnote ?? '単位：kWh　未計測：個別の電力センサーがない機器の消費'}</p>`}
