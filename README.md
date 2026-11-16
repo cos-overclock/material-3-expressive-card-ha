@@ -21,7 +21,14 @@ npm run build   # 型チェックとテストのあと、dist/material-3-express
 
 #### HACS で配布する
 
-リポジトリのルートに `hacs.json` があり、HACS の「カスタムリポジトリ」（種類は Dashboard）として追加できます。GitHub でリリースを公開すると、`.github/workflows/release.yml` が `dist/material-3-expressive-card.js` をビルドしてリリースに添付します。タグは `package.json` の `version` に `v` を付けたもの（例 `v0.2.0`）にします。ブラウザのコンソールに出るバージョンも `package.json` から入ります。
+リポジトリのルートに `hacs.json` があり、HACS の「カスタムリポジトリ」（種類は Dashboard）として追加できます。`v` で始まるタグをプッシュすると、`.github/workflows/release.yml` が `dist/material-3-expressive-card.js` をビルドし、それを添付した GitHub リリースを作ります。タグは `package.json` の `version` に `v` を付けたもの（例 `v0.2.0`）にします。一致しないとワークフローは失敗します。`v0.3.0-beta.1` のようにハイフンを含むタグはプレリリースになります。
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+ブラウザのコンソールに出るバージョンも `package.json` から入ります。
 
 #### フォント
 
