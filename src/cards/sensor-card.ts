@@ -1,6 +1,7 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { levelsField } from '../editor/form-helpers';
 import { fetchHistory, resample, type Point } from '../ha/history';
 import { hhmm, isUnavailable, numState } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
@@ -84,6 +85,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   @state() private scrubIndex: number | null = null;
   private fetchedFor?: string;
   private refreshTimer?: ReturnType<typeof setInterval>;
+  private fetchedAt = 0;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -299,6 +301,8 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         { name: 'icon', selector: { icon: {} } },
         { name: 'layout', selector: { select: { options: ['full', 'compact'] } } },
         { name: 'hours', selector: { number: { min: 1, max: 168, mode: 'box' } } },
+        levelsField(),
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -329,7 +333,20 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.refreshTimer = setInterval(() => this.loadHistory(true), REFRESH_MS);
+    this.startRefresh();
+  }
+
+  protected override visibilityChanged(visible: boolean): void {
+    // Back on the page after a while: the graph is stale, fetch it now.
+    if (visible && Date.now() - this.fetchedAt > REFRESH_MS) this.loadHistory(true);
+    this.startRefresh();
+  }
+
+  /** Refetch the history every REFRESH_MS while the page is visible. */
+  private startRefresh(): void {
+    clearInterval(this.refreshTimer);
+    this.refreshTimer = undefined;
+    if (this.pageVisible) this.refreshTimer = setInterval(() => this.loadHistory(true), REFRESH_MS);
   }
 
   override disconnectedCallback(): void {
@@ -353,6 +370,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const key = `${this.config.entity}|${this.config.hours ?? 24}`;
     if (!force && this.fetchedFor === key) return;
     this.fetchedFor = key;
+    this.fetchedAt = Date.now();
     try {
       const res = await fetchHistory(this.hass, [this.config.entity], this.config.hours ?? 24);
       this.history = res[this.config.entity] ?? [];
@@ -428,10 +446,10 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const short = this.shortUnit(s);
     return html`<div class="card ${isUnavailable(s) ? 'unavailable' : ''}">
       <div class="header">
-        <m3e-shape shape="cookie9" size=${this.compact ? 36 : 44} @click=${() => this.moreInfo(this.config.entity)}>
+        <m3e-shape shape="cookie9" size=${this.compact ? 36 : 44} @click=${() => this.tapEntity(this.config.entity)}>
           <m3e-icon .icon=${this.icon(s)}></m3e-icon>
         </m3e-shape>
-        <div class="text" @click=${() => this.moreInfo(this.config.entity)}>
+        <div class="text" @click=${() => this.tapEntity(this.config.entity)}>
           <p class="name">${name}</p>
           <p class="sub">${scrubbing ? `${hhmm(at)} ごろ` : `過去${hours}時間`}</p>
         </div>
@@ -467,7 +485,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const v = numState(s);
     const level = levelFor(v, sensorLevels(s, this.config.levels));
     const dc = s?.attributes.device_class as string | undefined;
-    return html`<div class="card compact ${isUnavailable(s) ? 'unavailable' : ''}" @click=${() => this.moreInfo(this.config.entity)}>
+    return html`<div class="card compact ${isUnavailable(s) ? 'unavailable' : ''}" @click=${() => this.tapEntity(this.config.entity)}>
       <div class="top">
         <m3e-icon .icon=${this.icon(s)}></m3e-icon>
         <span class="label">${name}</span>
@@ -480,7 +498,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
     return this.config.layout === 'compact' ? this.renderCompact(s) : this.renderFull(s);
   }

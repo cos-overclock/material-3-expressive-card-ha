@@ -3,7 +3,7 @@
  * section headings: "3つ点灯中", "2か所が開", "21.8 °C" (average)…
  */
 import { formatSensor } from './format';
-import { domainOf, isActive, numState } from './helpers';
+import { entityIdsOfDomain, isActive, numState } from './helpers';
 import type { HomeAssistant } from './types';
 
 export interface CountSummary {
@@ -43,7 +43,7 @@ export function jaDate(d: Date, withYear = false): string {
 
 export function summaryEntities(hass: HomeAssistant | undefined, s: Summary): string[] {
   if (s.entities) return s.entities;
-  if (s.type === 'count' && s.domain && hass) return Object.keys(hass.states).filter((id) => domainOf(id) === s.domain);
+  if (s.type === 'count' && s.domain && hass) return entityIdsOfDomain(hass, s.domain);
   return [];
 }
 
@@ -57,7 +57,8 @@ export function summaryText(hass: HomeAssistant | undefined, s: Summary): string
     const unit = s.unit ?? (hass?.states[ids[0]]?.attributes.unit_of_measurement as string | undefined) ?? '';
     const v = avg.toFixed(s.decimals ?? 1);
     // Same as formatSensor: "21.8°", "48%", "620 ppm".
-    if (unit === '°C' || unit === '°F') return `${v}°`;
+    if (unit === '°C') return `${v}°`;
+    if (unit === '°F') return `${v}°F`;
     if (unit === '%') return `${v}%`;
     return `${v}${unit ? ` ${unit}` : ''}`;
   }
@@ -69,9 +70,9 @@ export function summaryText(hass: HomeAssistant | undefined, s: Summary): string
   }).length;
   if (n === 0 && s.zero_text) return s.zero_text;
   return (s.text ?? '{n}')
-    .replace('{n}', String(n))
-    .replace('{rest}', String(ids.length - n))
-    .replace('{total}', String(ids.length));
+    .replaceAll('{n}', String(n))
+    .replaceAll('{rest}', String(ids.length - n))
+    .replaceAll('{total}', String(ids.length));
 }
 
 export { formatSensor };

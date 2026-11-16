@@ -17,6 +17,11 @@ export interface ConfigForm {
   schema: FormSchema[];
   computeLabel?: (schema: FormSchema, localize?: Localize) => string | undefined;
   computeHelper?: (schema: FormSchema) => string | undefined;
+  /**
+   * Reshape the config for the form (e.g. list items written as plain entity
+   * ids become `{ entity }` objects for an object selector). The card accepts both.
+   */
+  toForm?: (config: Record<string, unknown>) => Record<string, unknown>;
 }
 
 interface EditorHass {
@@ -25,6 +30,87 @@ interface EditorHass {
 }
 
 type Config = Record<string, unknown> & { color?: Accent };
+
+/** Japanese labels for option names shared by many cards (a card's own computeLabel wins). */
+const COMMON_LABELS: Record<string, string> = {
+  entity: 'エンティティ',
+  name: '名前',
+  icon: 'アイコン',
+  title: 'タイトル',
+  layout: 'レイアウト',
+  tap_action: 'タップしたとき',
+  hold_action: '長押ししたとき',
+  double_tap_action: 'ダブルタップしたとき',
+  interactions: '操作',
+  battery_entity: '電池残量',
+  calendars: 'カレンダー',
+  days: '表示する日数',
+  todo: 'To-do リスト',
+  show_completed: 'チェック済みを残す件数',
+  badges: 'バッジ',
+  align: '並べ方',
+  events: '検知イベント',
+  talk_entity: '通話のスイッチ',
+  time_entity: '「〇分前」の基準',
+  live: 'ライブ映像',
+  humidity_entity: '湿度センサー',
+  show_illustration: '窓のイラスト',
+  power_entity: '消費電力',
+  solar_power_entity: '太陽光の発電電力',
+  grid_power_entity: '買電・売電の電力',
+  show_chart: 'グラフ',
+  devices: '機器',
+  period: '期間',
+  max_devices: 'エリアごとの機器の数',
+  areas: 'エリア',
+  schedule: '収集日',
+  calendar: 'カレンダー',
+  deadline: '締め切り時刻（HH:MM）',
+  done_entity: '「出した」を記録するエンティティ',
+  note: '注記',
+  weather: '天気',
+  subtitle: 'サブタイトル',
+  forecast_days: '予報の日数',
+  forecast_type: '予報の種類',
+  course_entity: 'コース',
+  completion_entity: '終了時刻',
+  remaining_entity: '残り時間',
+  notify_entity: '終了通知のスイッチ',
+  notify_label: '終了通知の文言',
+  stats: '数値',
+  steps: '工程',
+  door_entity: 'ドアの開閉センサー',
+  hold_to_unlock: '長押しで解錠',
+  show_open: '「ドアを開ける」ボタン',
+  device_name: '機器名',
+  people: '家族',
+  footnote: '注記',
+  scenes: 'シーン',
+  active_hours: '実行済みとして色を付ける時間',
+  hours: 'グラフの時間（時間）',
+  levels: '値の段階',
+  show_switch: 'スイッチを表示',
+  secondary_entity: '状態の行に添える値',
+  secondary_prefix: '添える値の前の文言',
+  rooms: '部屋',
+  room_service: '部屋指定に使うスクリプト',
+  attribute: '属性',
+  kind: '値の種類',
+  on_text: 'オンの表示',
+  off_text: 'オフの表示',
+  unit: '単位',
+  decimals: '小数点以下の桁数',
+  min: '最小値',
+  max: '最大値',
+  burning_entity: '燃焼中のセンサー',
+  temperatures: '温度',
+  fill: 'お湯はり',
+  modes: 'ボタン',
+  usage: '使用量',
+  presets: '色のプリセット',
+  temperature_presets: '色温度のプリセット',
+  color: '色',
+};
 
 /**
  * ha-form is lazy-loaded by HA. It is normally present by the time a card
@@ -159,6 +245,7 @@ export class M3eCardEditor extends LitElement {
 
   private computeLabel = (s: FormSchema): string =>
     this.form.computeLabel?.(s, this.hass?.localize) ||
+    COMMON_LABELS[s.name] ||
     this.hass?.localize?.(`ui.panel.lovelace.editor.card.generic.${s.name}`) ||
     s.name;
 
@@ -244,7 +331,7 @@ export class M3eCardEditor extends LitElement {
       ${this.formReady && this.form.schema.length
         ? html`<ha-form
             .hass=${this.hass}
-            .data=${this.config}
+            .data=${this.form.toForm ? this.form.toForm(this.config) : this.config}
             .schema=${this.form.schema}
             .computeLabel=${this.computeLabel}
             .computeHelper=${this.computeHelper}

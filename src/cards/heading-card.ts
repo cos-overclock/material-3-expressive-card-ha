@@ -1,5 +1,5 @@
 import { css, html, nothing } from 'lit';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { ACTION_LABELS, M3eBaseCard, TAP_ACTION_FIELD, actionsSection, type BaseCardConfig } from './base-card';
 import type { LovelaceGridOptions } from '../ha/types';
 import { formatSensor } from '../ha/format';
 import { summaryEntities, summaryText, type Summary } from '../ha/summary';
@@ -15,7 +15,7 @@ export interface HeadingCardConfig extends BaseCardConfig {
   meta?: string;
   /** Live summary on the right, e.g. { type: count, entities: [...], state: open, text: '{n}か所が開', zero_text: すべて閉 }. */
   summary?: Summary;
-  /** Opens more-info for the first entity, or navigates here when tapped. */
+  /** Navigates here when tapped (shorthand for tap_action: { action: navigate }). */
   navigation_path?: string;
 }
 
@@ -93,10 +93,31 @@ export class M3eHeadingCard extends M3eBaseCard<HeadingCardConfig> {
       schema: [
         { name: 'title', required: true, selector: { text: {} } },
         { name: 'icon', selector: { icon: {} } },
-        { name: 'entities', selector: { entity: { multiple: true, domain: 'sensor' } } },
+        {
+          name: 'entities',
+          selector: {
+            object: {
+              multiple: true,
+              label_field: 'entity',
+              description_field: 'name',
+              fields: {
+                entity: { label: 'エンティティ', required: true, selector: { entity: {} } },
+                name: { label: '名前（値の前に付ける）', selector: { text: {} } },
+              },
+            },
+          },
+        },
         { name: 'meta', selector: { text: {} } },
-        { name: 'navigation_path', selector: { text: {} } },
+        { name: 'navigation_path', selector: { navigation: {} } },
+        actionsSection(TAP_ACTION_FIELD),
       ],
+      // The list editor works on objects: "sensor.x" becomes { entity: sensor.x }.
+      toForm: (c: Record<string, unknown>) => ({
+        ...c,
+        entities: Array.isArray(c.entities) ? c.entities.map((e) => (typeof e === 'string' ? { entity: e } : e)) : c.entities,
+      }),
+      computeLabel: (s: { name: string }) =>
+        ({ title: 'タイトル', icon: 'アイコン', entities: '右側に出す値', meta: '右側の文言（固定）', navigation_path: 'タップで開くページ', ...ACTION_LABELS })[s.name],
     };
   }
 
@@ -122,7 +143,9 @@ export class M3eHeadingCard extends M3eBaseCard<HeadingCardConfig> {
   }
 
   private tap(): void {
-    if (this.config.navigation_path) {
+    if (this.config.tap_action) {
+      this.runAction(this.config.tap_action, this.entityIds()[0]);
+    } else if (this.config.navigation_path) {
       history.pushState(null, '', this.config.navigation_path);
       window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: false } }));
     } else if (this.entityIds().length) {
@@ -130,12 +153,14 @@ export class M3eHeadingCard extends M3eBaseCard<HeadingCardConfig> {
     }
   }
 
-  protected override render() {
+  protected renderCard() {
     const readings = (this.config.entities ?? []).map((e) =>
-      typeof e === 'string' ? formatSensor(this.stateObj(e)) : `${e.name ? `${e.name} ` : ''}${formatSensor(this.stateObj(e.entity))}`,
+      typeof e === 'string' ? formatSensor(this.stateObj(e), this.hass) : `${e.name ? `${e.name} ` : ''}${formatSensor(this.stateObj(e.entity), this.hass)}`,
     );
     const meta = this.config.meta ?? (this.config.summary ? summaryText(this.hass, this.config.summary) : readings.join('  ·  '));
-    const linked = !!(this.config.navigation_path || this.config.entities?.length);
+    const linked = this.config.tap_action
+      ? this.config.tap_action.action !== 'none'
+      : !!(this.config.navigation_path || this.config.entities?.length);
     return html`<div class="heading ${linked ? 'link' : ''}" @click=${linked ? this.tap : nothing}>
       ${this.config.icon ? html`<m3e-icon .icon=${this.config.icon}></m3e-icon>` : nothing}
       <span class="title" role="heading" aria-level="2">${this.config.title}</span>

@@ -1,20 +1,24 @@
 {
-  "name": "m3e-cards",
-  "version": "0.1.0",
+  "name": "material-3-expressive-card",
+  "version": "0.2.0",
   "description": "Material 3 Expressive card library for Home Assistant (Catppuccin Latte / Mocha)",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "vite --open /preview/",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vitest run && vite build",
     "typecheck": "tsc --noEmit",
-    "icons": "node scripts/extract-icons.mjs"
+    "icons": "node scripts/extract-icons.mjs",
+    "icons:extra": "node scripts/extra-icons.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "lit": "^3.3.0"
   },
   "devDependencies": {
+    "@material-symbols/svg-400": "^0.49.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.0"
+    "vite": "^7.1.0",
+    "vitest": "^5.1.0"
   }
 }

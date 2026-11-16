@@ -1,6 +1,7 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { isUnavailable, numState } from '../ha/helpers';
 import { addSeries, energySources, mergeSources, range, statChanges, sum, type EnergyDevice, type EnergySources } from '../ha/energy';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
@@ -351,12 +352,19 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
         { name: 'battery_entity', selector: { entity: { domain: 'sensor', device_class: 'battery' } } },
         { name: 'grid_power_entity', selector: { entity: { domain: 'sensor', device_class: 'power' } } },
         { name: 'show_chart', default: true, selector: { boolean: {} } },
+        listOf('devices', { stat: field.entity('エネルギーのセンサー（統計 ID）', { domain: 'sensor' }, true), name: field.text('名前'), color: field.accent() }, 'name', 'stat'),
       ],
+      toForm: (c: Record<string, unknown>) => idsToObjects(c, 'devices', 'stat'),
     };
   }
 
   protected normalizeConfig(config: EnergyCardConfig): EnergyCardConfig {
     return config;
+  }
+
+  /** willUpdate refetches once REFRESH_MS has passed; the clock makes sure it runs. */
+  protected override clockInterval(): number {
+    return 60_000;
   }
 
   protected watchedEntities(): string[] {
@@ -532,7 +540,7 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
     return html`<span class="delta ${pct > 0 ? 'up' : ''}">昨日より ${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}%</span>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const c = this.config;
     const ps = this.stateObj(c.power_entity);
     const p = kw(ps);

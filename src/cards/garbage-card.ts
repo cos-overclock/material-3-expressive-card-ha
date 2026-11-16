@@ -1,27 +1,17 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { isActive } from '../ha/helpers';
+import { DAYS, ruleHits, ymd, type Rule } from '../ha/garbage-rules';
 import type { LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
 
-type Day = 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
-const DAYS: Day[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const WEEK_OPTIONS = ['1', '2', '3', '4', '5'].map((w) => ({ value: w, label: '第' + w }));
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'];
-
-interface Rule {
-  type: string;
-  /** Weekdays: mon, tue… */
-  days?: Day[];
-  /** Only these weeks of the month (第1・第3 → [1, 3]). */
-  weeks?: number[];
-  /** One-off dates, YYYY-MM-DD. */
-  dates?: string[];
-  color?: Accent;
-}
 
 export interface GarbageCardConfig extends BaseCardConfig {
   title?: string;
@@ -55,15 +45,7 @@ const GUESS: [RegExp, Accent][] = [
   [/粗大/, 'mauve'],
 ];
 
-const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-
-function ruleHits(rule: Rule, d: Date): boolean {
-  if (rule.dates?.includes(ymd(d))) return true;
-  if (!rule.days?.includes(DAYS[d.getDay()])) return false;
-  if (!rule.weeks?.length) return true;
-  return rule.weeks.includes(Math.floor((d.getDate() - 1) / 7) + 1);
-}
 
 /**
  * Garbage collection: the next collection day large with a "出した" button,
@@ -78,10 +60,8 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
   static override accentHint = '色を指定していないゴミの種類は、名前から決まる色の代わりにこの色になります。';
 
   @state() private calendarDays: Collection[] = [];
-  @state() private now = new Date();
   @state() private localDone = '';
   @state() private pressed = false;
-  private timer?: ReturnType<typeof setInterval>;
   private loadedAt = 0;
 
   static override styles = [
@@ -275,7 +255,17 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
   static getConfigForm() {
     return {
       schema: [
-        { name: 'schedule', selector: { object: {} } },
+        listOf(
+          'schedule',
+          {
+            type: field.text('種類（例：燃やすゴミ）', true),
+            days: field.select('曜日', DAYS.map((d, i) => ({ value: d, label: WEEKDAY[i] })), true),
+            weeks: field.select('第何週（省略で毎週）', WEEK_OPTIONS, true),
+            dates: field.texts('日付（YYYY-MM-DD）'),
+            color: field.accent(),
+          },
+          'type',
+        ),
         { name: 'calendar', selector: { entity: { domain: 'calendar' } } },
         { name: 'deadline', selector: { text: {} } },
         { name: 'done_entity', selector: { entity: { domain: 'input_boolean' } } },
@@ -286,6 +276,8 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
 
   protected normalizeConfig(config: GarbageCardConfig): GarbageCardConfig {
     if (!config.schedule?.length && !config.calendar) throw new Error('schedule or calendar is required');
+    // The editor's week picker gives strings ('1'); the rules compare numbers.
+    config.schedule = config.schedule?.map((r) => (r.weeks ? { ...r, weeks: r.weeks.map(Number) } : r));
     for (const r of config.schedule ?? []) {
       if (!r.type) throw new Error('schedule: every rule needs a type');
       if (r.days?.some((d) => !DAYS.includes(d))) throw new Error(`schedule: days are ${DAYS.join(', ')}`);
@@ -309,14 +301,13 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
     return 5;
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.timer = setInterval(() => (this.now = new Date()), 60_000);
+  /** The deadline and "today / tomorrow" move with the clock. */
+  protected override clockInterval(): number {
+    return 60_000;
   }
 
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    clearInterval(this.timer);
+  private get now(): Date {
+    return new Date(this.clockNow);
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
@@ -414,7 +405,7 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
     this.localDone = done ? '' : this.doneKey(c);
   }
 
-  protected override render() {
+  protected renderCard() {
     const all = this.collections();
     const next = all[0];
     const rest = all.slice(1).flatMap((c) => c.types.map((t) => ({ date: c.date, type: t }))).slice(0, this.config.upcoming ?? 3);

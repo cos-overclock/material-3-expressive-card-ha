@@ -1,10 +1,29 @@
-import type { HassEntity, HomeAssistant } from './types';
+import type { ActionConfig, HapticType, HassEntity, HomeAssistant } from './types';
 
 export const domainOf = (entityId: string) => entityId.split('.')[0];
 
 /** Fire HA's more-info dialog for an entity. */
 export function fireMoreInfo(node: HTMLElement, entityId: string): void {
   node.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
+}
+
+/** Ask HA's companion app to vibrate (ignored in a desktop browser). */
+export function fireHaptic(node: HTMLElement, type: HapticType): void {
+  node.dispatchEvent(new CustomEvent('haptic', { detail: type, bubbles: true, composed: true }));
+}
+
+/**
+ * Hand an action to HA's frontend, which runs every action type (navigate, url,
+ * perform-action, assist…), asks for confirmation and vibrates as configured.
+ */
+export function fireAction(node: HTMLElement, action: ActionConfig, entityId?: string): void {
+  node.dispatchEvent(
+    new CustomEvent('hass-action', {
+      detail: { config: { entity: entityId, tap_action: action }, action: 'tap' },
+      bubbles: true,
+      composed: true,
+    }),
+  );
 }
 
 const ON_STATES = new Set(['on', 'open', 'opening', 'unlocked', 'playing', 'home', 'heat', 'cool', 'dry', 'fan_only', 'auto', 'heat_cool', 'cleaning', 'active']);
@@ -50,6 +69,31 @@ export function toggleEntity(hass: HomeAssistant, stateObj: HassEntity): Promise
     default:
       return hass.callService('homeassistant', 'toggle', {}, target);
   }
+}
+
+/** Last scan per domain: [states object it came from, its size, the ids]. */
+const domainCache = new Map<string, { states: object; size: number; ids: string[] }>();
+
+/**
+ * Every entity id of a domain. HA hands out a new `states` object on each state
+ * change, so scanning thousands of ids per card per update adds up: the list is
+ * reused while the number of entities stays the same and its ids still exist.
+ */
+export function entityIdsOfDomain(hass: HomeAssistant | undefined, domain: string): string[] {
+  const states = hass?.states;
+  if (!states) return [];
+  const hit = domainCache.get(domain);
+  if (hit?.states === states) return hit.ids;
+  let size = 0;
+  for (const _ in states) size++;
+  if (hit && hit.size === size && hit.ids.every((id) => id in states)) {
+    hit.states = states;
+    return hit.ids;
+  }
+  const prefix = `${domain}.`;
+  const ids = Object.keys(states).filter((id) => id.startsWith(prefix));
+  domainCache.set(domain, { states, size, ids });
+  return ids;
 }
 
 export function friendlyName(stateObj: HassEntity | undefined, fallback = ''): string {
@@ -116,14 +160,27 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
   return call;
 }
 
-/** Inject the brand fonts into the document once (shadow roots inherit @font-face). */
+const GOOGLE_FONTS =
+  'https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,100..1000&family=Noto+Sans+JP:wght@400;500;700&display=swap';
+
+/**
+ * Inject the brand fonts into the document once (shadow roots inherit @font-face).
+ *
+ * The HA theme decides where they come from (`m3e-fonts`):
+ *  - unset: Google Fonts
+ *  - `none`: load nothing; the cards fall back to the system fonts (offline installs)
+ *  - a URL such as `/local/fonts/m3e-fonts.css`: a self-hosted stylesheet
+ * `window.M3E_CARDS_FONTS` (same values) wins over the theme.
+ */
 export function ensureFonts(): void {
-  const id = 'm3e-cards-fonts';
+  const id = 'material-3-expressive-card-fonts';
   if (document.getElementById(id)) return;
+  const fromTheme = getComputedStyle(document.documentElement).getPropertyValue('--m3e-fonts').trim().replace(/^["']|["']$/g, '');
+  const setting = String((window as unknown as { M3E_CARDS_FONTS?: string }).M3E_CARDS_FONTS ?? fromTheme);
+  if (setting === 'none') return;
   const link = document.createElement('link');
   link.id = id;
   link.rel = 'stylesheet';
-  link.href =
-    'https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,100..1000&family=Noto+Sans+JP:wght@400;500;700&display=swap';
+  link.href = setting || GOOGLE_FONTS;
   document.head.appendChild(link);
 }

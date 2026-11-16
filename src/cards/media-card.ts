@@ -1,6 +1,6 @@
 import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { isUnavailable } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -8,6 +8,9 @@ import { define } from '../components/define';
 import '../components/m3e-icon';
 import '../components/m3e-shape';
 import '../components/m3e-wavy-progress';
+import '../components/m3e-slider';
+import { debounce } from '../ha/helpers';
+import { field, listOf } from '../editor/form-helpers';
 
 export interface MediaCardConfig extends BaseCardConfig {
   entity: string;
@@ -17,10 +20,32 @@ export interface MediaCardConfig extends BaseCardConfig {
   show_repeat?: boolean;
   /** Show the artwork faintly behind the whole card (default: true). */
   show_backdrop?: boolean;
+  /** Volume slider and mute (or −/+ for step-only players). Default true. */
+  show_volume?: boolean;
+  /** Input / source picker when the player has a source_list. Default true. */
+  show_source?: boolean;
+  /**
+   * Players this one can group with (Sonos, Music Assistant…). Each shows as a
+   * chip; tapping joins or leaves. Needs a player that supports grouping.
+   */
+  group_entities?: (string | { entity: string; name?: string })[];
 }
 
 // media_player supported_features bits
-const F = { PAUSE: 1, SEEK: 2, PREVIOUS: 16, NEXT: 32, PLAY: 16384, SHUFFLE: 32768, REPEAT: 262144 };
+const F = {
+  PAUSE: 1,
+  SEEK: 2,
+  VOLUME_SET: 4,
+  VOLUME_MUTE: 8,
+  PREVIOUS: 16,
+  NEXT: 32,
+  VOLUME_STEP: 1024,
+  SELECT_SOURCE: 2048,
+  PLAY: 16384,
+  SHUFFLE: 32768,
+  REPEAT: 262144,
+  GROUPING: 524288,
+};
 
 const fmtTime = (sec: number) => {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -51,6 +76,14 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
   private seekSentAt?: string;
   private seekTimer?: ReturnType<typeof setTimeout>;
   private timer?: ReturnType<typeof setInterval>;
+  /** Volume (0–100) while dragging and until HA reports it. */
+  @state() private volume?: number;
+  @state() private sourcesOpen = false;
+
+  private sendVolume = debounce((v: number) => {
+    this.svc('volume_set', { volume_level: v / 100 });
+    setTimeout(() => (this.volume = undefined), 1500);
+  }, 250);
 
   static override styles = [
     M3eBaseCard.styles,
@@ -266,6 +299,85 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
       .idle .title {
         color: var(--m3-on-surface-variant);
       }
+      .volume {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .volume m3e-slider {
+        flex: 1;
+        min-width: 0;
+        --m3e-slider-height: 36px;
+        --m3e-slider-active: var(--accent-fill);
+        --m3e-slider-inactive: var(--m3-surface-highest);
+        --m3e-slider-handle: var(--m3-on-surface);
+      }
+      .volume .small.muted {
+        background: var(--m3-surface-high);
+        color: var(--m3-on-surface);
+      }
+      .volume .level {
+        min-width: 3ch;
+        text-align: right;
+        font: 500 12px / 16px var(--m3e-font-brand);
+        color: var(--m3-on-surface-variant);
+        font-variant-numeric: tabular-nums;
+      }
+      .extras {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .chip {
+        all: unset;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 36px;
+        max-width: 100%;
+        padding: 6px 12px 6px 10px;
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--m3-surface-high) 85%, transparent);
+        font: 500 13px / 18px var(--m3e-font-plain);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        transition:
+          border-radius var(--m3e-spatial-fast),
+          background-color var(--m3e-effects-default),
+          color var(--m3e-effects-default);
+      }
+      .chip span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chip m3e-icon {
+        --m3e-icon-size: 18px;
+        flex: none;
+      }
+      .chip:active {
+        border-radius: 18px;
+      }
+      .chip:focus-visible {
+        outline: 2px solid var(--accent-fill);
+        outline-offset: 2px;
+      }
+      .chip.on {
+        background: var(--accent-container);
+        color: var(--accent-on-container);
+      }
+      .chip .chevron {
+        transition: transform var(--m3e-spatial-default);
+      }
+      .chip.open .chevron {
+        transform: rotate(180deg);
+      }
+      .sources {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
 
       /* ---- compact density (phones and tablets) ---- */
       :host([compact]) .card {
@@ -335,9 +447,21 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
 
   static getConfigForm() {
     return {
+      computeLabel: (s: { name: string }) =>
+        ({ show_volume: '音量を表示', show_source: '入力の切り替えを表示', group_entities: 'グループにできるプレーヤー' })[s.name],
+      toForm: (c: Record<string, unknown>) => ({
+        ...c,
+        group_entities: Array.isArray(c.group_entities)
+          ? c.group_entities.map((g) => (typeof g === 'string' ? { entity: g } : g))
+          : c.group_entities,
+      }),
       schema: [
         { name: 'entity', required: true, selector: { entity: { domain: 'media_player' } } },
         { name: 'device_name', selector: { text: {} } },
+        { name: 'show_volume', default: true, selector: { boolean: {} } },
+        { name: 'show_source', default: true, selector: { boolean: {} } },
+        listOf('group_entities', { entity: field.entity('プレーヤー', { domain: 'media_player' }, true), name: field.text('名前') }, 'entity', 'name'),
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -348,7 +472,102 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
   }
 
   protected watchedEntities(): string[] {
-    return [this.config.entity];
+    return [this.config.entity, ...this.groupPeers().map((g) => g.entity)];
+  }
+
+  private groupPeers(): { entity: string; name?: string }[] {
+    return (this.config.group_entities ?? [])
+      .map((g) => (typeof g === 'string' ? { entity: g } : g))
+      .filter((g) => g.entity && g.entity !== this.config.entity);
+  }
+
+  /** Mute, then a volume slider (volume_set) or −/+ (volume_step only). */
+  private renderVolume(s: HassEntity, feat: number) {
+    const a = s.attributes;
+    const canSet = !!(feat & F.VOLUME_SET) && a.volume_level != null;
+    const canStep = !!(feat & F.VOLUME_STEP);
+    const canMute = !!(feat & F.VOLUME_MUTE);
+    if (!canSet && !canStep && !canMute) return nothing;
+    const muted = !!a.is_volume_muted;
+    const level = this.volume ?? Math.round(Number(a.volume_level ?? 0) * 100);
+    const icon = muted || level === 0 ? 'volume-off' : level < 50 ? 'volume-down' : 'volume-up';
+    return html`<div class="volume">
+      ${canMute
+        ? this.btn('mute', `small ${muted ? 'muted' : ''}`, icon, muted ? 'ミュートを解除' : 'ミュート', () => this.svc('volume_mute', { is_volume_muted: !muted }))
+        : html`<m3e-icon .icon=${icon} aria-hidden="true"></m3e-icon>`}
+      ${canSet
+        ? html`<m3e-slider
+              .value=${level}
+              min="0"
+              max="100"
+              label="音量"
+              ?disabled=${muted}
+              @input=${(e: CustomEvent<{ value: number }>) => (this.volume = e.detail.value)}
+              @change=${(e: CustomEvent<{ value: number }>) => {
+                this.volume = e.detail.value;
+                this.sendVolume(e.detail.value);
+              }}
+            ></m3e-slider>
+            <span class="level">${level}</span>`
+        : canStep
+          ? html`<span style="flex:1"></span>
+              ${this.btn('vol-down', 'small', 'remove', '音量を下げる', () => this.svc('volume_down'))}
+              ${this.btn('vol-up', 'small', 'add', '音量を上げる', () => this.svc('volume_up'))}`
+          : nothing}
+    </div>`;
+  }
+
+  /** Source picker and group chips. */
+  private renderExtras(s: HassEntity, feat: number) {
+    const a = s.attributes;
+    const sources = this.config.show_source !== false && feat & F.SELECT_SOURCE ? ((a.source_list as string[] | undefined) ?? []) : [];
+    const peers = feat & F.GROUPING ? this.groupPeers() : [];
+    if (!sources.length && !peers.length) return nothing;
+    const members = (a.group_members as string[] | undefined) ?? [];
+    return html`<div class="extras">
+        ${sources.length
+          ? html`<button
+              class="chip ${this.sourcesOpen ? 'open' : ''}"
+              aria-expanded=${this.sourcesOpen ? 'true' : 'false'}
+              @click=${() => (this.sourcesOpen = !this.sourcesOpen)}
+            >
+              <m3e-icon icon="input"></m3e-icon><span>${a.source ?? '入力'}</span>
+              <m3e-icon class="chevron" icon="keyboard-arrow-down"></m3e-icon>
+            </button>`
+          : nothing}
+        ${peers.map((p) => {
+          const joined = members.includes(p.entity);
+          const name = p.name ?? (this.stateObj(p.entity)?.attributes.friendly_name as string | undefined) ?? p.entity;
+          return html`<button
+            class="chip ${joined ? 'on' : ''}"
+            aria-pressed=${joined ? 'true' : 'false'}
+            title=${joined ? `${name}をグループから外す` : `${name}と一緒に再生`}
+            @click=${() =>
+              joined
+                ? this.call('media_player', 'unjoin', {}, p.entity)
+                : this.svc('join', { group_members: [p.entity] })}
+          >
+            <m3e-icon .icon=${joined ? 'speaker-group' : 'speaker'}></m3e-icon><span>${name}</span>
+          </button>`;
+        })}
+      </div>
+      ${sources.length && this.sourcesOpen
+        ? html`<div class="sources" role="listbox" aria-label="入力">
+            ${sources.map(
+              (src) => html`<button
+                class="chip ${src === a.source ? 'on' : ''}"
+                role="option"
+                aria-selected=${src === a.source ? 'true' : 'false'}
+                @click=${() => {
+                  this.svc('select_source', { source: src });
+                  this.sourcesOpen = false;
+                }}
+              >
+                ${src === a.source ? html`<m3e-icon icon="check"></m3e-icon>` : nothing}<span>${src}</span>
+              </button>`,
+            )}
+          </div>`
+        : nothing}`;
   }
 
   protected override defaultAccent(): Accent {
@@ -365,9 +584,7 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.timer = setInterval(() => {
-      if (this.stateObj(this.config?.entity)?.state === 'playing') this.now = Date.now();
-    }, 1000);
+    this.startTimer();
   }
 
   override disconnectedCallback(): void {
@@ -376,8 +593,30 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
     clearTimeout(this.seekTimer);
   }
 
+  protected override visibilityChanged(visible: boolean): void {
+    if (visible) this.now = Date.now();
+    this.startTimer();
+  }
+
+  /** Advance the playback position each second while playing and visible. */
+  private startTimer(): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
+    if (!this.pageVisible) return;
+    this.timer = setInterval(() => {
+      if (this.stateObj(this.config?.entity)?.state === 'playing') this.now = Date.now();
+    }, 1000);
+  }
+
   protected override shouldUpdate(changed: Map<PropertyKey, unknown>): boolean {
-    return changed.has('now') || changed.has('pressed') || changed.has('seek') || super.shouldUpdate(changed as never);
+    return (
+      changed.has('now') ||
+      changed.has('pressed') ||
+      changed.has('seek') ||
+      changed.has('volume') ||
+      changed.has('sourcesOpen') ||
+      super.shouldUpdate(changed as never)
+    );
   }
 
   protected override willUpdate(changed: Map<PropertyKey, unknown>): void {
@@ -448,9 +687,9 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
     </button>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
-    if (!s) return html`<div class="card unavailable">エンティティが見つかりません: ${this.config.entity}</div>`;
+    if (!s) return html`<div class="card unavailable"></div>`;
     const a = s.attributes;
     const playing = s.state === 'playing';
     const active = playing || s.state === 'paused';
@@ -465,10 +704,10 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
 
     return html`<div class="card ${playing ? 'playing' : ''} ${active ? '' : 'idle'} ${backdrop ? 'has-backdrop' : ''} ${isUnavailable(s) ? 'unavailable' : ''}">
       ${backdrop ? html`<div class="backdrop" aria-hidden="true"><img src=${a.entity_picture} alt="" /></div>` : nothing}
-      <div class="now" @click=${backdrop ? () => this.moreInfo(this.config.entity) : nothing}>
+      <div class="now" @click=${backdrop ? () => this.tapEntity(this.config.entity) : nothing}>
         ${backdrop
           ? nothing
-          : html`<div class="art" @click=${() => this.moreInfo(this.config.entity)}>
+          : html`<div class="art" @click=${() => this.tapEntity(this.config.entity)}>
               ${a.entity_picture
                 ? html`<img src=${a.entity_picture} alt="" />`
                 : html`<div class="orb"></div>
@@ -514,6 +753,8 @@ export class M3eMediaCard extends M3eBaseCard<MediaCardConfig> {
             )
           : nothing}
       </div>
+      ${this.config.show_volume !== false && s.state !== 'off' ? this.renderVolume(s, feat) : nothing}
+      ${s.state !== 'off' ? this.renderExtras(s, feat) : nothing}
     </div>`;
   }
 }

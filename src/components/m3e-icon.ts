@@ -1,6 +1,10 @@
 import { LitElement, css, html, nothing, svg, type PropertyValues } from 'lit';
 import { property } from 'lit/decorators.js';
-import { ICONS } from '../icons/icon-data';
+import { ICONS as DESIGN_ICONS } from '../icons/icon-data';
+import { EXTRA_ICONS } from '../icons/extra-icons';
+
+/** The design's glyphs, then the extra Material Symbols (the design's win on a clash). */
+const ICONS = { ...EXTRA_ICONS, ...DESIGN_ICONS };
 import { SPRINGS, springTransition } from '../motion/spring';
 import { define } from './define';
 
@@ -54,7 +58,9 @@ export class M3eIcon extends LitElement {
     const key = glyphKey(this.icon);
     if (key) {
       const g = ICONS[key];
-      return html`<svg viewBox="0 0 24 24" aria-hidden="true">${svg`<path transform="translate(${g.dx} ${g.dy})" d=${g.d}></path>`}</svg>`;
+      return g.vb
+        ? html`<svg viewBox=${g.vb} aria-hidden="true">${svg`<path d=${g.d}></path>`}</svg>`
+        : html`<svg viewBox="0 0 24 24" aria-hidden="true">${svg`<path transform="translate(${g.dx} ${g.dy})" d=${g.d}></path>`}</svg>`;
     }
     if (!this.icon) return nothing;
     return html`<ha-icon .icon=${this.icon}></ha-icon>`;

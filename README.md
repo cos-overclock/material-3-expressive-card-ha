@@ -1,4 +1,4 @@
-# M3E Cards
+# Material 3 Expressive Card
 
 FigCraft のホームダッシュボードのデザイン（`../home-dashboard.figcraft`）を、Home Assistant のカスタムカードとして実装したライブラリです。配色は Catppuccin の Latte（ライト）と Mocha（ダーク）で、動きは Material 3 Expressive のモーションに合わせています。
 
@@ -7,16 +7,30 @@ FigCraft のホームダッシュボードのデザイン（`../home-dashboard.f
 ```sh
 npm install
 npm run dev     # プレビュー（モックの HA）を http://localhost:5173/preview/ で開く
-npm run build   # dist/m3e-cards.js を作る
+npm test        # 単体テスト（表示の書式・集計・ゴミ出しの曜日・エネルギーの按分など）
+npm run build   # 型チェックとテストのあと、dist/material-3-expressive-card.js を作る
 ```
 
 ### Home Assistant への組み込み
 
-1. `npm run build` で作った `dist/m3e-cards.js` を `<config>/www/` にコピーします。
-2. 「設定 → ダッシュボード → リソース」で `/local/m3e-cards.js` を **JavaScript モジュール**として追加します。
+1. `npm run build` で作った `dist/material-3-expressive-card.js` を `<config>/www/` にコピーします。
+2. 「設定 → ダッシュボード → リソース」で `/local/material-3-expressive-card.js` を **JavaScript モジュール**として追加します。
 3. ダッシュボードの周りの色も合わせる場合は、`themes/m3e-catppuccin.yaml` をテーマとして読み込みます。
 
 カードは HA のダークモードに合わせて Latte と Mocha を自動で切り替えます。どちらかに固定したいときは `theme: latte` か `theme: mocha` を指定します。
+
+#### HACS で配布する
+
+リポジトリのルートに `hacs.json` があり、HACS の「カスタムリポジトリ」（種類は Dashboard）として追加できます。GitHub でリリースを公開すると、`.github/workflows/release.yml` が `dist/material-3-expressive-card.js` をビルドしてリリースに添付します。タグは `package.json` の `version` に `v` を付けたもの（例 `v0.2.0`）にします。ブラウザのコンソールに出るバージョンも `package.json` から入ります。
+
+#### フォント
+
+カードは Google Fonts から Google Sans Flex と Noto Sans JP を読み込みます。インターネットにつながらない環境や、外部に通信したくない場合は、HA のテーマに `m3e-fonts` を加えます。
+
+```yaml
+m3e-fonts: none                       # 読み込まない（システムのフォントで表示）
+m3e-fonts: /local/fonts/m3e-fonts.css # 自分で置いた @font-face の CSS を読み込む
+```
 
 #### カード追加時の候補（HA 2026.6 以降）
 
@@ -34,6 +48,12 @@ npm run build   # dist/m3e-cards.js を作る
 | 洗濯機らしい `sensor` `select`（ID か名前に washer・laundry・洗濯など） | 洗濯機 |
 | `weather` | 時計と天気（通常・フッター） |
 | `calendar` `todo` / `person` | 予定と買い物リスト / 家族 |
+| `fan` `humidifier` | 扇風機・空気清浄機・加湿器 |
+| `select` `input_select` `number` `input_number` | 選択・数値（通常・1行） |
+| `remote`、`device_class: tv` の `media_player` | テレビのリモコン |
+| `timer` | タイマー |
+| `weather` | 天気（時計と天気に加えて） |
+| `alarm_control_panel` | 警備（通常・開始/解除ボタンつき） |
 
 ### スマートフォン・タブレットでのコンパクト表示
 
@@ -110,6 +130,39 @@ cards:
 
 すべてのカードで `color`（アクセント色）、`theme`、`density`（[コンパクト表示](#スマートフォンタブレットでのコンパクト表示)）を指定できます。
 
+### 操作（`tap_action`・`hold_action`・`double_tap_action`）
+
+HA 標準のカードと同じ書き方で、タップ・長押し・ダブルタップの動作を変えられます。`toggle`・`more-info`・`none` に加えて、`navigate`・`url`・`perform-action`・`assist` と `confirmation`（確認ダイアログ）も使えます。編集画面では「操作」の折りたたみ項目から選べます。
+
+```yaml
+type: custom:m3e-tile-card
+entity: light.kitchen
+tap_action: { action: toggle }
+hold_action: { action: more-info }
+double_tap_action:
+  action: perform-action
+  perform_action: script.kitchen_bright
+  confirmation: { text: 全部明るくしますか？ }
+```
+
+- カード全体が1つのボタンになっているカード（タイル・ライト・値・警備）は、3種類すべてに対応します。ダブルタップは `double_tap_action` を書いたときだけ待ちます。書かなければタップはすぐに反応します。
+- 操作部がたくさんあるカード（エアコン・カーテン・鍵・メディア・センサーなど）は、見出し（アイコンと名前）をタップしたときの `tap_action` に対応します。省略すると、これまでどおり詳細ダイアログを開きます。
+- 見出しカードは `tap_action` で好きなページへ移動できます（従来の `navigation_path` も使えます）。
+
+キーボードでは Enter / Space がタップ、Shift+Enter（またはコンテキストメニューキー）が長押しです。HA のスマホアプリでは、切り替えや長押し、解錠などで端末が振動します。
+
+### エンティティが見つからないとき
+
+`entity` に書いたエンティティが HA にないときは、カードの代わりに赤い警告（「エンティティが見つかりません」とエンティティ ID）を表示します。名前を変えたときや、統合を削除したときに気づけます。
+
+### 画面に出ていないとき
+
+ブラウザのタブが裏にあるあいだは、カメラの静止画の読み直し、時計、メディアの再生位置、グラフの読み直しを止めます。タブに戻るとすぐに最新の状態に追いつきます。エネルギー・予定・シーン・タイルの「〇分前」などは1分ごとに表示を更新し、エネルギーと予定は決まった間隔でデータを読み直します。
+
+### 編集画面のリスト
+
+シーン、家族、予定のカレンダー、ゴミ出しの収集日、掃除の部屋、バッジ、カメラの検知イベント、給湯のボタンなどのリストは、編集画面で1件ずつフォームで追加・編集できます（以前は YAML の入力欄でした）。`[person.yuki]` のように ID だけで書いた項目も、そのまま編集できます。
+
 ### アクセントカラー（`color`）
 
 `color` には Catppuccin の14色のアクセントを指定できます。
@@ -144,6 +197,8 @@ title: リビング
 icon: chair
 entities: [sensor.living_temperature, sensor.living_humidity]   # 右側に「21.8° · 45%」
 ```
+
+右側の値は、表示精度（エンティティの設定の「表示精度」）に合わせて丸めます。°F のセンサーは「70.2°F」のように単位を付けます。
 
 右側には、いくつかのエンティティを数えた結果も出せます。`{entity, name}` と書くと値の前に名前が付きます（「浴室 24.5°」）。
 
@@ -181,6 +236,8 @@ footer:
     weather: weather.home
     forecast_days: 3   # バーの幅が 540px 以上のときだけ表示（既定 3）
 ```
+
+`forecast_type: hourly` にすると、日ごとの代わりに1時間ごとの予報（「15時」）を並べます。数は `forecast_days` で指定します。
 
 左に日付・時計・`subtitle`（なければ `title`、それもなければ「照明N つ点灯中」）を縦に並べ、右に今の天気（気温・天気・最高/最低）を出します。天気をタップすると詳細ダイアログが開きます。バーが狭いときは、540px 未満で予報を、360px 未満で日付の月と最高/最低を省きます。フッターでは HA がカードに影を付けます。
 
@@ -231,6 +288,8 @@ show_color_sliders: true  # 色相・彩度・色温度のスライダー
 
 `full` レイアウトは、フルカラーと色温度の両方に対応した照明向けです。明るさスライダーを上に置き、その下の「カラー / 色温度」のボタンで操作部を切り替えます。切り替えるとパネルが横にスライドし、高さはスプリングで変わります。最初に開くタブは照明の今の `color_mode` に合わせ、ほかの画面で照明の色の種類が変わると、それに合わせてタブも切り替わります。タブを切り替えるだけでは照明に命令を送りません。プリセットやスライダーを操作したときに切り替わります。色の同期は `color` レイアウトと同じです。
 
+照明がエフェクト（`effect_list`）を持っていれば、`color`・`temperature`・`full` レイアウトの下に「エフェクト」のチップを出します。タップすると一覧が開き、選ぶとそのエフェクトでつけます。`show_effects: false` で消せます。
+
 `auto` を指定すると、照明の `supported_color_modes` から自動で選びます。両方に対応していれば `full`、カラーだけなら `color`、色温度だけなら `temperature`、どちらもなければ `slider` です。
 
 ### `custom:m3e-climate-card` エアコン
@@ -249,7 +308,11 @@ vertical_vanes:      # 上下風向のボタンを明示したい場合（省略
   - { mode: '5', angle: 90 }
 ```
 
-運転モードによってカード全体の色が変わります（暖房 peach、冷房 blue、除湿 teal、送風 green、自動 lavender）。左右の風向は `swing_horizontal_modes`（HA 2024.12 以降）があるときだけ表示します。
+運転モードによってカード全体の色が変わります（暖房 peach、冷房 blue、除湿 teal、送風 green、自動 lavender）。
+
+運転モードが `heat_cool` で、エアコンが下限と上限（`target_temp_low`・`target_temp_high`）で温度を持つときは、「暖房（下限）」と「冷房（上限）」の2つの温度をそれぞれの −/＋ で設定します。下限と上限は1刻み以上離れたままにします。
+
+エアコンがプリセット（`preset_modes`：エコ・おやすみ・パワフルなど）を持っていれば、運転モードの下にボタンで並べます。`show_presets: false` で消せます。表示名は `labels: { preset: { boost: 急速 } }` で変えられます。温度の刻みは `target_temp_step` に合わせ、ないときは °C で 0.5、°F で 1 にします。左右の風向は `swing_horizontal_modes`（HA 2024.12 以降）があるときだけ表示します。
 
 風量・風向の各行は、エンティティがその項目に対応しているときだけ表示します。対応していても使わない行は、`show_fan_mode`・`show_swing_mode`・`show_swing_horizontal_mode` を `false` にすると消せます。右上の要約（「自動・スイング・中央」など）からも消えます。風量だけが残ったときは行の見出しを「風量」に、風向だけが残ったときは「風向」にします。表示する行がひとつもなくなると、「風量・風向」の行も消えます。`show_fan_panel: false` は、個別の設定に関係なくパネル全体を消します。
 
@@ -316,6 +379,16 @@ device_name: リビング スピーカー
 
 プレーヤーがジャケット画像（`entity_picture`）を返すときは、ジャケットをカード全体の背景にうっすら表示します（左上の小さなジャケットは出しません）。下へいくほど背景色に溶け込み、操作ボタンが見やすくなります。一時停止中はさらに薄くなります。`show_backdrop: false` を指定すると、背景には出さず、従来どおり左上に小さく表示します。濃さとぼかしは CSS 変数 `--m3e-media-backdrop-opacity`（既定 `0.55`）と `--m3e-media-backdrop-blur`（既定 `0px`）で調整できます。
 
+音量に対応したプレーヤーでは、操作ボタンの下に音量のスライダーとミュートのボタンを出します（音量を段階でしか変えられないプレーヤーは −/＋）。入力（`source_list`）があれば「入力」のチップから切り替えられます。`show_volume: false`・`show_source: false` で消せます。
+
+```yaml
+type: custom:m3e-media-card
+entity: media_player.living_speaker
+group_entities: [media_player.kitchen_speaker, media_player.bedroom_speaker]  # 一緒に再生できるスピーカー
+```
+
+`group_entities` に書いたスピーカーはチップで並び、タップするとこのプレーヤーのグループに入ります（`media_player.join`）。グループに入っているチップは色が付き、もう一度タップするとグループから外れます。グループ再生に対応したプレーヤー（Sonos、Music Assistant など）で使えます。
+
 プレーヤーがシークに対応していれば、シークバーをドラッグ（またはタップ）して再生位置を変えられます。ドラッグ中は時間表示が追従し、離したときに `media_player.media_seek` を送ります。フォーカスした状態では ←/→ キーで5秒ずつ、Home/End で先頭/末尾に移動します。
 
 ### `custom:m3e-badges-card` バッジ
@@ -345,6 +418,8 @@ show_illustration: true
 
 `full` は、窓のイラスト、開き具合のスライダー、「開ける・止める・閉める」のボタンを表示します。カーテンは左右から、`device_class` が shade のシェードは上から、blind / shutter は羽根付きで上から閉まります。開閉中は HA から届く位置に合わせてカーテンがバネで動き、スライダーをドラッグしている間も追従します。
 
+羽根の角度を変えられるブラインド（`supported_features` に tilt があるもの）では、`full` に「羽根の角度」の行を出します。スライダーで角度を、左右のボタンで羽根を閉じる・開く（対応していれば止める）を操作します。`show_tilt: false` で消せます。
+
 `compact` は高さ 56px（セクションの1行分）の1行で、アイコン・名前・「エリア・開閉と位置」と ▲ ■ ▼ のボタンを並べます。エリアの代わりに好きな文言を出すときは `secondary` を指定します。
 
 ```yaml
@@ -364,6 +439,15 @@ entity: alarm_control_panel.home
 ```
 
 警備状態をカード全体の色とシェイプで表示します。警備中は緑、開始中・まもなく警報は黄、警報中は赤、警備オフは無彩色です。下の行には名前と、その状態になった時刻（わかれば操作した人も）を出します。タップすると HA の詳細ダイアログが開き、そこで警備の開始・解除ができます。
+
+```yaml
+type: custom:m3e-alarm-card
+entity: alarm_control_panel.home
+show_actions: true                 # カードに開始・解除のボタンを出す
+modes: [arm_home, arm_away, arm_night]   # 開始ボタンの種類（省略すると対応するすべて）
+```
+
+`show_actions: true` にすると、警備オフのときは「在宅・外出・就寝・長期不在」の開始ボタンを、警備中は「警備を解除」のボタンを出します。暗証番号が必要なパネル（`code_format` があるもの）では、カードの中にテンキーが開きます（鍵のカードと同じテンキーです）。開始に暗証番号が要らないパネル（`code_arm_required: false`）では、開始はすぐに実行します。番号が違うと HA のエラーを出し、テンキーが揺れます。
 
 ### `custom:m3e-lock-card` 鍵
 
@@ -518,6 +602,8 @@ rooms:
 # room_service: script.clean_rooms   # 既定は vacuum.send_command（app_segment_clean）
 ```
 
+吸引力（`fan_speed_list`）を持つ掃除機では、「吸引力」のチップ（静か・標準・ターボ・最大など）で切り替えられます（`show_fan_speed: false` で消せます）。場所を音で知らせる機能（`locate`）に対応していれば、見出しの右にボタンを出します。
+
 部屋のチップを選んで「掃除を始める」を押すと、選んだ部屋だけを掃除します。既定では Roborock・Xiaomi 向けに `vacuum.send_command` で `app_segment_clean` を送ります。ほかの機種では `room_service` にスクリプトを指定すると、`segments` と `rooms`（部屋名）を変数として渡します。部屋を選ばなければ `vacuum.start` です。
 
 ### `custom:m3e-laundry-card` 洗濯機・洗濯乾燥機
@@ -612,9 +698,93 @@ tap_action: { action: toggle } # 既定は詳細ダイアログ
 
 Bool が真のとき、tile と mini はカード全体をアクセント色にし、row は右の値の背景をアクセント色にします。アクセント色は `device_class` から決めます（ドア・窓は peach、人感は yellow、異常・漏水・煙は red など）。`color` で変えられます。値が変わると、数字や文言が転がって切り替わります。
 
+### `custom:m3e-fan-card` 扇風機・空気清浄機・加湿器
+
+```yaml
+type: custom:m3e-fan-card
+entity: fan.living_purifier          # fan か humidifier
+sensors: [sensor.living_pm25]        # 一緒に出す値（PM2.5・湿度など）
+# show_speed / show_modes / show_oscillate: false で各操作部を消せる
+# labels: { smart: おまかせ }        # モードの表示名
+```
+
+扇風機・サーキュレーター・空気清浄機（`fan`）は、電源のスイッチ、風量のスライダー（`percentage_step` の刻み）、プリセット（自動・おやすみ・ターボなど）、首振りと回転の向きを出します。プリセットが4つまではボタン、それより多いとチップで並べます。加湿器・除湿機（`humidifier`）は、目標湿度の −/＋（5% 刻み）、モード、今の湿度を出します。運転中はシェイプが回ります。
+
+### `custom:m3e-control-card` 選択・数値
+
+```yaml
+type: custom:m3e-control-card
+entity: input_select.house_mode      # select / input_select / number / input_number
+control: auto                        # auto | buttons | chips | slider
+layout: card                         # card（既定）| row（1行）
+labels: { away: 外出 }               # 選択肢の表示名
+```
+
+`select` と `input_select` は選択肢をボタン（4つまで）かチップで、`number` と `input_number` はスライダーか −/＋ で操作します。`auto` では、数値はエンティティの `mode`（box なら −/＋、それ以外はスライダー）に合わせます。`layout: row` は高さ 56px の1行で、数値は −/＋、選択肢はボタンから詳細ダイアログを開きます。
+
+### `custom:m3e-area-card` 部屋
+
+```yaml
+type: custom:m3e-area-card
+area: living_room                    # HA のエリア ID
+navigation_path: /lovelace/living    # タップで開くページ（tap_action も可）
+# temperature_entity / humidity_entity: 見出しの温度・湿度（省略するとエリアの最初のセンサー）
+# exclude_entities: [light.living_ambient]
+```
+
+HA のエリアに入っているエンティティ（エンティティ自身のエリア、なければデバイスのエリア。非表示と設定・診断のエンティティは除く）をまとめて表示します。見出しの右に温度と湿度、下にチップで「2つ点灯」「人がいます」「1か所が開」「暖房 22.5°」「カーテン 1か所が開」「再生中の曲」を出します。照明のチップをタップすると、エリアの照明をまとめて消す（すべて消えていればつける）ことができます（`show_light_toggle: false` で詳細ダイアログを開くだけに）。
+
+### `custom:m3e-maintenance-card` メンテナンス
+
+```yaml
+type: custom:m3e-maintenance-card
+battery_threshold: 20                # この残量（%）以下の電池を出す
+exclude: ['sensor.*_rssi', 'sensor.old_*']   # * が使える
+max_items: 5                         # 項目ごとの件数（超えた分は「ほか N件」）
+# show_batteries / show_updates / show_unavailable: false で項目を消せる
+```
+
+電池残量の少ない機器（`device_class: battery` のセンサーと、電池切れの binary_sensor）、アップデートのある `update` エンティティ、利用できなくなったエンティティを一覧にします。何もなければ「すべて正常です」と出します。各行をタップすると詳細ダイアログを開き、アップデートの行は「更新」ボタンでインストールできます（管理者のみ）。利用できないエンティティは HA 全体を調べるため、1分ごとに読み直します。
+
+### `custom:m3e-remote-card` テレビのリモコン
+
+```yaml
+type: custom:m3e-remote-card
+entity: media_player.living_tv       # 電源・音量・再生・入力に使う（省略可）
+remote_entity: remote.living_tv      # 方向キーなどを remote.send_command で送る
+preset: android_tv                   # generic | android_tv | apple_tv | roku | samsung | lg
+commands: { menu: SETTINGS }         # キーごとにコマンド名を上書き
+key_actions:                         # キーごとに好きな操作を割り当てる
+  home: { action: perform-action, perform_action: script.tv_home }
+```
+
+方向キーと決定、戻る・ホーム・メニュー、音量（ミュート）とチャンネル、巻き戻し・再生・早送り、入力の切り替えを並べます。電源・音量・ミュート・再生・入力は、`entity` のメディアプレーヤーが対応していればそちらを使い、それ以外は `remote_entity` にコマンドを送ります。コマンド名は統合によって違うので、`preset` で選ぶか `commands` で書きます。カードにフォーカスがあるときは、キーボードの矢印キーと Enter・Backspace でも操作できます。
+
+### `custom:m3e-timer-card` タイマー
+
+```yaml
+type: custom:m3e-timer-card
+entity: timer.kitchen
+presets: ['3:00', '5:00', '10:00', '1:00:00']   # すぐ始める時間（分:秒、時:分:秒、または分の数値）
+show_add: true                                 # 計測中に「+1分」
+```
+
+タイマーのヘルパーの残り時間を大きな数字で出し、波形のバーが残りに合わせて短くなります。スタート・一時停止・再開・取り消し、プリセットのチップ（押すとその時間で始める）、計測中の「+1分」（`timer.change`）があります。計測中だけ1秒ごとに表示を更新します。
+
+### `custom:m3e-weather-card` 天気
+
+```yaml
+type: custom:m3e-weather-card
+entity: weather.home
+hours: 12         # 1時間ごとの予報の数（show_hourly: false で消す）
+days: 5           # 日ごとの予報の日数、今日を含む（show_daily: false で消す）
+```
+
+今の気温と天気、体感温度・今日の最高/最低・湿度・風を出し、その下に1時間ごとの予報（横にスクロール、降水確率つき）と、日ごとの予報を並べます。日ごとの予報の帯は、その週の最低から最高までの幅の中で、その日の気温の範囲を示します。
+
 ### アイコン
 
-`icon` には、デザインに含まれる Material Symbols の名前（`lightbulb`、`m3:lightbulb` など。一覧は `src/icons/icon-data.ts`）か、HA の `mdi:` アイコンを指定できます。
+`icon` には、デザインに含まれる Material Symbols の名前（`lightbulb`、`m3:lightbulb` など。一覧は `src/icons/icon-data.ts`）か、HA の `mdi:` アイコンを指定できます。新しいカードと機能で使うアイコンのうちデザインにないものは、同じ Material Symbols Rounded から `src/icons/extra-icons.ts` に取り込んでいます。増やすときは `scripts/extra-icons.mjs` の一覧に名前を足して `npm run icons:extra` を実行します。
 
 ## モーション
 
@@ -654,9 +824,10 @@ src/
   theme/       Latte / Mocha と14色のアクセント（10色は FigCraft の変数から、4色は同じ規則で生成）
   editor/      HA の編集画面（カードのフォーム＋アクセントカラーの色見本）
   icons/       デザインから抽出したアイコン（scripts/extract-icons.mjs で生成）
-  components/  m3e-shape, m3e-switch, m3e-slider, m3e-button-group, m3e-wavy-progress, m3e-rolling-text, m3e-icon, m3e-line-chart
-  ha/          HA との接続（履歴・エネルギー統計・集計・表示用の文言）
-  cards/       各カード（共通処理は base-card.ts）
+  components/  m3e-shape, m3e-switch, m3e-slider, m3e-button-group, m3e-wavy-progress, m3e-rolling-text, m3e-icon, m3e-line-chart, m3e-keypad
+  ha/          HA との接続（履歴・エネルギー統計・天気予報・集計・表示用の文言、ゴミ出しの規則・時間の書式）
+  cards/       各カード（共通処理は base-card.ts、複数の操作部を持つカードの共通スタイルは shared-styles.ts）
 preview/       モックの HA を使ったプレビュー（editor.html は編集画面の確認用）
+tests/         単体テスト（vitest）
 themes/        HA テーマ
 ```

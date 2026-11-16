@@ -1,6 +1,6 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, PressGesture, press, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, press, PressGesture, type BaseCardConfig } from './base-card';
 import { defaultAccentFor, defaultIconFor, stateText } from '../ha/domain';
 import { domainOf, isActive, isUnavailable, relativeTime, toggleEntity } from '../ha/helpers';
 import type { LovelaceGridOptions } from '../ha/types';
@@ -53,7 +53,8 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
   private gesture = new PressGesture(
     this,
     () => this.tap(),
-    () => this.runAction(this.config.hold_action?.action ?? 'more-info', this.config.entity),
+    () => this.handleAction('hold', 'more-info'),
+    this.doubleTap,
   );
 
   /** True for a moment after a scene / script / button is pressed. */
@@ -164,6 +165,9 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
         { name: 'icon', selector: { icon: {} } },
         { name: 'layout', selector: { select: { options: LAYOUTS } } },
         { name: 'show_switch', selector: { boolean: {} } },
+        { name: 'secondary_entity', selector: { entity: {} } },
+        { name: 'secondary_prefix', selector: { text: {} } },
+        actionsSection(),
       ],
     };
   }
@@ -172,6 +176,11 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
     if (!config.entity) throw new Error('entity is required');
     if (config.layout && !LAYOUTS.includes(config.layout)) throw new Error(`layout must be one of: ${LAYOUTS.join(', ')}`);
     return config;
+  }
+
+  /** Scene / script / button tiles say when they last ran ("3分前"): keep it fresh. */
+  protected override clockInterval(): number {
+    return this.isPress() ? 30_000 : 0;
   }
 
   protected watchedEntities(): string[] {
@@ -215,9 +224,9 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
   }
 
   private tap(): void {
-    const action = this.config.tap_action?.action ?? 'toggle';
+    const action = this.actionFor('tap', 'toggle');
     this.runAction(action, this.config.entity);
-    if (action === 'toggle' && this.isPress() && this.stateObj(this.config.entity)?.state !== 'unavailable') {
+    if (action.action === 'toggle' && this.isPress() && this.stateObj(this.config.entity)?.state !== 'unavailable') {
       clearTimeout(this.flashTimer);
       this.flash = true;
       this.flashTimer = setTimeout(() => (this.flash = false), FLASH_MS);
@@ -255,7 +264,7 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
     if (this.getAttribute('layout') !== mode) this.setAttribute('layout', mode);
   }
 
-  protected override render() {
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
     const button = this.isPress();
     const on = isActive(s) || this.flash;

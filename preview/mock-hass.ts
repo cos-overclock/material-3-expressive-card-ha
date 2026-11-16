@@ -25,7 +25,10 @@ function entity(entity_id: string, state: string, attributes: Record<string, unk
 }
 
 const LIGHT_HS = { supported_color_modes: ['hs', 'color_temp'], min_color_temp_kelvin: 2000, max_color_temp_kelvin: 6500 };
-const MEDIA_FEATURES = 1 | 2 | 16 | 32 | 16384 | 32768 | 262144; // pause, seek, prev, next, play, shuffle, repeat
+// pause, seek, volume set / mute, prev, next, select source, play, shuffle, repeat, grouping
+const MEDIA_FEATURES = 1 | 2 | 4 | 8 | 16 | 32 | 2048 | 16384 | 32768 | 262144 | 524288;
+// turn on / off, volume step / mute, select source, pause, play
+const TV_FEATURES = 128 | 256 | 1024 | 8 | 2048 | 1 | 16384;
 
 /** Stand-in album art: a dusk sky with a moon over hills. */
 const MOCK_ARTWORK = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
@@ -62,6 +65,8 @@ function initialStates(): HassEntity[] {
       swing_mode: 'swing',
       swing_horizontal_modes: ['swing', 'left', 'center', 'right', 'wide'],
       swing_horizontal_mode: 'center',
+      preset_modes: ['none', 'eco', 'sleep', 'boost'],
+      preset_mode: 'none',
     }),
     entity('media_player.living_speaker', 'playing', {
       friendly_name: 'リビング スピーカー',
@@ -73,16 +78,92 @@ function initialStates(): HassEntity[] {
       entity_picture: MOCK_ARTWORK,
       shuffle: false,
       repeat: 'off',
+      volume_level: 0.35,
+      is_volume_muted: false,
+      source: 'Spotify',
+      source_list: ['Spotify', 'AirPlay', 'Bluetooth', 'ラジオ'],
+      group_members: ['media_player.living_speaker'],
       supported_features: MEDIA_FEATURES,
+    }),
+    entity('media_player.kitchen_speaker', 'idle', { friendly_name: 'キッチン スピーカー', supported_features: MEDIA_FEATURES, group_members: [] }),
+    entity('media_player.living_tv', 'on', {
+      friendly_name: 'リビングのテレビ',
+      device_class: 'tv',
+      app_name: 'YouTube',
+      source: 'HDMI 1',
+      source_list: ['テレビ', 'HDMI 1', 'HDMI 2', 'YouTube', 'Netflix'],
+      volume_level: 0.2,
+      is_volume_muted: false,
+      supported_features: TV_FEATURES,
+    }),
+    entity('remote.living_tv', 'on', { friendly_name: 'リビングのテレビ', current_activity: 'YouTube' }),
+    entity('fan.living_purifier', 'on', {
+      friendly_name: '空気清浄機',
+      percentage: 40,
+      percentage_step: 20,
+      preset_modes: ['auto', 'sleep', 'turbo'],
+      preset_mode: 'auto',
+      supported_features: 1 | 8 | 16 | 32,
+    }),
+    entity('fan.living_circulator', 'on', {
+      friendly_name: 'サーキュレーター',
+      percentage: 50,
+      oscillating: true,
+      direction: 'forward',
+      supported_features: 1 | 2 | 4 | 16 | 32,
+    }),
+    entity('sensor.living_pm25', '8', { friendly_name: 'PM2.5', device_class: 'pm25', unit_of_measurement: 'µg/m³' }),
+    entity('input_select.house_mode', '在宅', { friendly_name: '家のモード', options: ['在宅', '外出', '就寝', '長期不在'] }),
+    entity('input_select.wakeup_sound', '小鳥', { friendly_name: '目覚ましの音', options: ['小鳥', '波', '風鈴', 'ピアノ', 'ラジオ', 'チャイム'] }),
+    entity('input_number.speaker_volume', '35', { friendly_name: '通知の音量', min: 0, max: 100, step: 5, unit_of_measurement: '%', mode: 'slider' }),
+    entity('timer.kitchen', 'idle', { friendly_name: 'キッチンタイマー', duration: '0:05:00' }),
+    entity('update.router_firmware', 'on', {
+      friendly_name: 'ルーターのファームウェア',
+      title: 'ルーター',
+      installed_version: '1.2.0',
+      latest_version: '1.3.1',
+      supported_features: 1,
+    }),
+    entity('update.home_assistant_core', 'off', { friendly_name: 'Home Assistant Core', installed_version: '2026.11.1', latest_version: '2026.11.1' }),
+    entity('sensor.hallway_motion_battery', '12', { friendly_name: '廊下の人感センサーの電池', device_class: 'battery', unit_of_measurement: '%' }),
+    entity('sensor.balcony_temperature', 'unavailable', { friendly_name: 'ベランダの温度', device_class: 'temperature', unit_of_measurement: '°C' }),
+    entity('climate.kids_ac', 'heat_cool', {
+      friendly_name: '子ども部屋のエアコン',
+      hvac_modes: ['off', 'heat_cool', 'heat', 'cool'],
+      hvac_action: 'idle',
+      current_temperature: 23.4,
+      target_temp_low: 20,
+      target_temp_high: 26,
+      target_temp_step: 0.5,
+      min_temp: 16,
+      max_temp: 30,
     }),
     entity('sensor.living_temperature', '21.8', { device_class: 'temperature', unit_of_measurement: '°C' }),
     entity('sensor.living_humidity', '45', { device_class: 'humidity', unit_of_measurement: '%' }),
 
     // Bedroom
-    entity('light.bed_light', 'on', { friendly_name: 'ベッドライト', brightness: 115, color_mode: 'hs', hs_color: [325, 56], ...LIGHT_HS }),
+    entity('light.bed_light', 'on', {
+      friendly_name: 'ベッドライト',
+      brightness: 115,
+      color_mode: 'hs',
+      hs_color: [325, 56],
+      effect_list: ['なし', 'キャンドル', '呼吸', '虹', 'オーロラ'],
+      effect: 'なし',
+      ...LIGHT_HS,
+    }),
     entity('light.bed_foot', 'on', { friendly_name: 'フットライト', brightness: 26, color_mode: 'brightness' }),
     entity('light.bed_ceiling', 'off', { friendly_name: '天井照明' }),
-    entity('humidifier.bedroom', 'on', { friendly_name: '加湿器', humidity: 50 }),
+    entity('humidifier.bedroom', 'on', {
+      friendly_name: '加湿器',
+      humidity: 50,
+      min_humidity: 30,
+      max_humidity: 70,
+      current_humidity: 42,
+      action: 'humidifying',
+      available_modes: ['normal', 'eco', 'sleep', 'auto', 'boost'],
+      mode: 'normal',
+      supported_features: 1,
+    }),
     entity('climate.bedroom_ac', 'off', { friendly_name: 'エアコン', hvac_modes: ['off', 'heat', 'cool'] }),
     entity('sensor.bedroom_temperature', '20.6', { device_class: 'temperature', unit_of_measurement: '°C' }),
     entity('sensor.bedroom_humidity', '52', { device_class: 'humidity', unit_of_measurement: '%' }),
@@ -129,7 +210,7 @@ function initialStates(): HassEntity[] {
 
     // Covers
     entity('cover.bedroom_screen', 'closed', { friendly_name: 'ロールスクリーン', current_position: 0, device_class: 'shade', supported_features: 15 }),
-    entity('cover.study_blind', 'open', { friendly_name: 'ブラインド', current_position: 50, device_class: 'blind', supported_features: 15 }),
+    entity('cover.study_blind', 'open', { friendly_name: 'ブラインド', current_position: 50, current_tilt_position: 50, device_class: 'blind', supported_features: 255 }),
     entity('sun.sun', 'below_horizon', { friendly_name: '太陽' }),
 
     entity('sensor.living_co2', '620', { friendly_name: 'CO₂', device_class: 'carbon_dioxide', unit_of_measurement: 'ppm' }),
@@ -175,7 +256,8 @@ function initialStates(): HassEntity[] {
     entity('switch.entrance_talk', 'off', { friendly_name: '通話' }),
 
     // Security
-    entity('alarm_control_panel.home', 'armed_home', { friendly_name: 'ホームセキュリティ' }),
+    // Arm home / away / night / vacation; disarming needs the code 1234.
+    entity('alarm_control_panel.home', 'armed_home', { friendly_name: 'ホームセキュリティ', supported_features: 1 | 2 | 4 | 32, code_format: 'number', code_arm_required: false }),
     { ...entity('lock.front_door', 'locked', { friendly_name: '玄関ドア', changed_by: 'ゆうき' }), last_changed: todayAt(18, 5) },
     // A smart lock with a PIN (1234) that can also unlatch the door (LockEntityFeature.OPEN).
     { ...entity('lock.back_door', 'locked', { friendly_name: '勝手口', code_format: '^\\d{4}$', supported_features: 1 }), last_changed: todayAt(7, 40) },
@@ -185,20 +267,28 @@ function initialStates(): HassEntity[] {
     entity('binary_sensor.living_window', 'off', { friendly_name: '窓（リビング）', device_class: 'window' }),
     entity('binary_sensor.garage_door', 'off', { friendly_name: 'ガレージ', device_class: 'garage_door' }),
     entity('binary_sensor.hallway_motion', 'off', { friendly_name: '人感センサー（廊下）', device_class: 'motion' }),
+    entity('binary_sensor.bedroom_motion', 'on', { friendly_name: '人感センサー（寝室）', device_class: 'occupancy' }),
 
     // Overview
     entity('scene.good_morning', iso(-10 * 3600_000), { friendly_name: 'おはよう', icon: 'wb-twilight' }),
     entity('scene.going_out', iso(-8 * 3600_000), { friendly_name: 'おでかけ', icon: 'door-front' }),
     entity('scene.theater', iso(-20 * 60_000), { friendly_name: 'シアター', icon: 'tv' }),
     entity('scene.good_night', iso(-30 * 3600_000), { friendly_name: 'おやすみ', icon: 'nights-stay' }),
-    entity('weather.home', 'partlycloudy', { friendly_name: '自宅', temperature: 14, humidity: 62 }),
+    entity('weather.home', 'partlycloudy', {
+      friendly_name: '自宅',
+      temperature: 14,
+      apparent_temperature: 12,
+      humidity: 62,
+      wind_speed: 11,
+      wind_speed_unit: 'km/h',
+    }),
     { ...entity('person.yuki', 'home', { friendly_name: 'ゆうき' }), last_changed: iso(-40 * 60_000) },
     { ...entity('person.misaki', 'home', { friendly_name: 'みさき' }), last_changed: iso(-30 * 3600_000) },
     { ...entity('person.sora', '駅前の塾', { friendly_name: 'そら' }), last_changed: iso(-150 * 60_000) },
     entity('sensor.sora_travel_time', '15', { friendly_name: 'そらの帰宅時間', unit_of_measurement: 'min' }),
 
     // Housework
-    entity('vacuum.robot', 'cleaning', { friendly_name: 'ロボット掃除機', fan_speed: 'balanced', supported_features: 16383 }),
+    entity('vacuum.robot', 'cleaning', { friendly_name: 'ロボット掃除機', fan_speed: 'balanced', fan_speed_list: ['quiet', 'balanced', 'turbo', 'max'], supported_features: 16383 }),
     entity('sensor.robot_battery', '64', { device_class: 'battery', unit_of_measurement: '%' }),
     entity('sensor.robot_current_room', 'リビング', { friendly_name: '掃除中の部屋' }),
     entity('sensor.robot_progress', '67', { unit_of_measurement: '%' }),
@@ -234,6 +324,23 @@ const ENTITY_AREA: Record<string, string> = {
   'cover.bedroom_screen': 'bedroom',
   'cover.study_blind': 'study',
   ...ENERGY_AREAS,
+  'sensor.living_temperature': 'living',
+  'sensor.living_humidity': 'living',
+  'light.living_ceiling': 'living',
+  'light.living_indirect': 'living',
+  'light.living_floor': 'living',
+  'climate.living_ac': 'living',
+  'binary_sensor.living_window': 'living',
+  'media_player.living_speaker': 'living',
+  'fan.living_purifier': 'living',
+  'sensor.bedroom_temperature': 'bedroom',
+  'sensor.bedroom_humidity': 'bedroom',
+  'light.bed_light': 'bedroom',
+  'light.bed_foot': 'bedroom',
+  'light.bed_ceiling': 'bedroom',
+  'humidifier.bedroom': 'bedroom',
+  'climate.bedroom_ac': 'bedroom',
+  'binary_sensor.bedroom_motion': 'bedroom',
 };
 
 /** Synthetic daily curves for the history API, by device class. */
@@ -288,6 +395,25 @@ function mockCalendar(path: string): unknown[] {
   return [];
 }
 
+/** Next 24 hours: a mild day that turns to rain in the evening. */
+const HOURLY = (() => {
+  const start = new Date();
+  start.setMinutes(0, 0, 0);
+  return Array.from({ length: 24 }, (_, i) => {
+    const t = new Date(start.getTime() + i * 3600_000);
+    const h = t.getHours();
+    const dh = Math.min(Math.abs(h - 14), 24 - Math.abs(h - 14));
+    const temp = 11 + 6 * Math.exp(-(dh ** 2) / 30);
+    const rain = h >= 19 && h <= 23;
+    return {
+      datetime: t.toISOString(),
+      condition: rain ? 'rainy' : h >= 18 || h < 6 ? (h >= 18 ? 'cloudy' : 'clear-night') : h < 11 ? 'sunny' : 'partlycloudy',
+      temperature: Math.round(temp),
+      precipitation_probability: rain ? 70 : h >= 16 ? 30 : 0,
+    };
+  });
+})();
+
 const FORECAST = (() => {
   const conds: [string, number, number, number][] = [
     ['partlycloudy', 17, 9, 20],
@@ -308,6 +434,8 @@ const FORECAST = (() => {
 
 export class MockHass {
   private states: Record<string, HassEntity> = {};
+  /** Entity registry: stable between updates, as HA's is. */
+  private registry = Object.fromEntries(Object.entries(ENTITY_AREA).map(([entity_id, area_id]) => [entity_id, { entity_id, area_id }]));
   private listeners = new Set<Listener>();
   darkMode = false;
   /** Simulated device latency. */
@@ -386,7 +514,8 @@ export class MockHass {
       states: this.states,
       themes: { darkMode: this.darkMode },
       areas: Object.fromEntries(Object.entries(AREAS).map(([area_id, name]) => [area_id, { area_id, name }])),
-      entities: Object.fromEntries(Object.entries(ENTITY_AREA).map(([entity_id, area_id]) => [entity_id, { entity_id, area_id }])),
+      entities: this.registry,
+      user: { id: 'preview', name: 'プレビュー', is_admin: true },
       locale: { language: 'ja' },
       callService: (domain, service, data = {}, target) => {
         const ids = [target?.entity_id ?? (data.entity_id as string | string[] | undefined)].flat().filter(Boolean) as string[];
@@ -419,7 +548,10 @@ export class MockHass {
       },
       connection: {
         subscribeMessage: async <T,>(cb: (msg: T) => void, msg: Record<string, unknown>) => {
-          if (msg.type === 'weather/subscribe_forecast') setTimeout(() => cb({ type: 'daily', forecast: FORECAST } as T), 200);
+          if (msg.type === 'weather/subscribe_forecast') {
+            const hourly = msg.forecast_type === 'hourly';
+            setTimeout(() => cb({ type: msg.forecast_type, forecast: hourly ? HOURLY : FORECAST } as T), 200);
+          }
           return () => {};
         },
       },
@@ -427,6 +559,7 @@ export class MockHass {
   }
 
   private bathTimer?: ReturnType<typeof setInterval>;
+  private timerDone?: ReturnType<typeof setTimeout>;
 
   /** ふろ自動: fill from the current level to 100 %, then keep warm. */
   startBathFill(): void {
@@ -493,6 +626,7 @@ export class MockHass {
           // HA also reports an approximate rgb/hs for white light.
           Object.assign(attrs, { color_temp_kelvin: k, color_mode: 'color_temp', rgb_color: kelvinToRgb(k), hs_color: hexToHs(rgbHex(kelvinToRgb(k))) });
         }
+        if (data.effect) attrs.effect = data.effect;
         if (attrs.brightness) attrs.last_brightness = attrs.brightness;
         return this.update(id, 'on', attrs);
       }
@@ -502,6 +636,8 @@ export class MockHass {
         return this.update(id, String(this.todo.filter((i) => i.status === 'needs_action').length));
       }
       case 'vacuum': {
+        if (service === 'set_fan_speed') return this.update(id, undefined, { fan_speed: data.fan_speed });
+        if (service === 'locate') return;
         const next: Record<string, string> = { start: 'cleaning', pause: 'paused', stop: 'idle', return_to_base: 'returning', send_command: 'cleaning' };
         if (service === 'send_command') {
           this.update('sensor.robot_progress', '0');
@@ -528,13 +664,67 @@ export class MockHass {
         }
         return this.update(id, service === 'toggle' ? (on ? 'off' : 'on') : service === 'turn_on' ? 'on' : 'off');
       case 'input_boolean':
-      case 'humidifier':
         return this.update(id, service === 'toggle' ? (on ? 'off' : 'on') : service === 'turn_on' ? 'on' : 'off');
+      case 'humidifier':
+        if (service === 'set_humidity') return this.update(id, undefined, { humidity: data.humidity });
+        if (service === 'set_mode') return this.update(id, undefined, { mode: data.mode });
+        return this.update(id, service === 'toggle' ? (on ? 'off' : 'on') : service === 'turn_on' ? 'on' : 'off', {
+          action: service === 'turn_off' || (service === 'toggle' && on) ? 'off' : 'humidifying',
+        });
       case 'fan': {
+        if (service === 'set_percentage') return this.update(id, Number(data.percentage) > 0 ? 'on' : 'off', { percentage: data.percentage });
+        if (service === 'set_preset_mode') return this.update(id, 'on', { preset_mode: data.preset_mode });
+        if (service === 'oscillate') return this.update(id, undefined, { oscillating: data.oscillating });
+        if (service === 'set_direction') return this.update(id, undefined, { direction: data.direction });
         const next = service === 'toggle' ? !on : service === 'turn_on';
-        return this.update(id, next ? 'on' : 'off', { percentage: next ? 50 : 0 });
+        return this.update(id, next ? 'on' : 'off', { percentage: next ? (s.attributes.last_percentage ?? 50) : 0, last_percentage: s.attributes.percentage || 50 });
       }
+      case 'remote':
+        if (service === 'turn_on' || service === 'turn_off') return this.update(id, service === 'turn_on' ? 'on' : 'off');
+        return; // send_command: logged above
+      case 'timer': {
+        const total = (v: unknown) => String(v ?? '0:0:0').split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
+        const fmt = (sec: number) => `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+        clearTimeout(this.timerDone);
+        const finish = (sec: number) => {
+          this.timerDone = setTimeout(() => (this.update(id, 'idle', { finishes_at: undefined, remaining: undefined }), this.emit()), sec * 1000);
+          return new Date(Date.now() + sec * 1000).toISOString();
+        };
+        if (service === 'start') {
+          const sec = s.state === 'paused' && !data.duration ? total(s.attributes.remaining) : total(data.duration ?? s.attributes.duration);
+          return this.update(id, 'active', { duration: data.duration ?? s.attributes.duration, finishes_at: finish(sec), remaining: fmt(sec) });
+        }
+        if (service === 'pause') {
+          const left = Math.max(0, (Date.parse(s.attributes.finishes_at) - Date.now()) / 1000);
+          return this.update(id, 'paused', { remaining: fmt(left), finishes_at: undefined });
+        }
+        if (service === 'change') {
+          const left = Math.max(0, (Date.parse(s.attributes.finishes_at) - Date.now()) / 1000) + total(data.duration);
+          return this.update(id, 'active', { finishes_at: finish(left), duration: fmt(Math.max(total(s.attributes.duration), left)) });
+        }
+        return this.update(id, 'idle', { finishes_at: undefined, remaining: undefined });
+      }
+      case 'alarm_control_panel': {
+        if (service === 'alarm_disarm') {
+          if (data.code !== '1234') throw new Error('暗証番号が違います');
+          return this.update(id, 'disarmed', { changed_by: 'ダッシュボード' });
+        }
+        const mode = service.replace('alarm_arm_', 'armed_');
+        this.update(id, 'arming');
+        setTimeout(() => (this.update(id, mode, { changed_by: 'ダッシュボード' }), this.emit()), 2000);
+        return;
+      }
+      case 'update':
+        if (service === 'install') {
+          this.update(id, undefined, { in_progress: true });
+          setTimeout(() => (this.update(id, 'off', { in_progress: false, installed_version: s.attributes.latest_version }), this.emit()), 2500);
+        }
+        return;
       case 'cover': {
+        if (service === 'set_cover_tilt_position') return this.update(id, undefined, { current_tilt_position: Number(data.tilt_position) });
+        if (service === 'open_cover_tilt') return this.update(id, undefined, { current_tilt_position: 100 });
+        if (service === 'close_cover_tilt') return this.update(id, undefined, { current_tilt_position: 0 });
+        if (service === 'stop_cover_tilt') return;
         if (service === 'stop_cover') return this.stopCover(id);
         const target =
           service === 'set_cover_position' ? Number(data.position) : service === 'open_cover' || (service === 'toggle' && s.state !== 'open') ? 100 : 0;
@@ -584,7 +774,11 @@ export class MockHass {
           case 'toggle':
             return this.handle(d, s.state === 'off' ? 'turn_on' : 'turn_off', id, data);
           case 'set_temperature':
-            return this.update(id, undefined, { temperature: data.temperature });
+            return data.target_temp_low !== undefined
+              ? this.update(id, undefined, { target_temp_low: data.target_temp_low, target_temp_high: data.target_temp_high })
+              : this.update(id, undefined, { temperature: data.temperature });
+          case 'set_preset_mode':
+            return this.update(id, undefined, { preset_mode: data.preset_mode });
           case 'set_fan_mode':
             return this.update(id, undefined, { fan_mode: data.fan_mode });
           case 'set_swing_mode':
@@ -620,7 +814,31 @@ export class MockHass {
           case 'turn_off':
             return this.update(id, 'off');
           case 'turn_on':
-            return this.update(id, 'paused');
+            return this.update(id, a.device_class === 'tv' ? 'on' : 'paused');
+          case 'volume_set':
+            return this.update(id, undefined, { volume_level: data.volume_level, is_volume_muted: false });
+          case 'volume_up':
+          case 'volume_down': {
+            const v = Number(a.volume_level ?? 0) + (service === 'volume_up' ? 0.05 : -0.05);
+            return this.update(id, undefined, { volume_level: Math.min(1, Math.max(0, v)) });
+          }
+          case 'volume_mute':
+            return this.update(id, undefined, { is_volume_muted: data.is_volume_muted });
+          case 'select_source':
+            return this.update(id, undefined, { source: data.source, app_name: data.source });
+          case 'join': {
+            const members = [...new Set([...(a.group_members ?? [id]), ...(data.group_members as string[])])];
+            for (const m of members) this.update(m, undefined, { group_members: members });
+            return;
+          }
+          case 'unjoin': {
+            for (const [mid, m] of Object.entries(this.states)) {
+              if (mid.startsWith('media_player.') && (m.attributes.group_members ?? []).includes(id)) {
+                this.update(mid, undefined, { group_members: (m.attributes.group_members as string[]).filter((x) => x !== id) });
+              }
+            }
+            return this.update(id, undefined, { group_members: [] });
+          }
         }
       }
     }

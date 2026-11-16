@@ -1,6 +1,6 @@
 import { css, html, nothing } from 'lit';
-import { state } from 'lit/decorators.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { hhmm, isActive, isUnavailable, numState } from '../ha/helpers';
 import type { LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -69,8 +69,6 @@ const matches = (st: string | string[], value: string) => [st].flat().includes(v
  * segments fill on the effects spring; the power button rounds while pressed.
  */
 export class M3eLaundryCard extends M3eBaseCard<LaundryCardConfig> {
-  @state() private now = Date.now();
-  private timer?: ReturnType<typeof setInterval>;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -310,6 +308,10 @@ export class M3eLaundryCard extends M3eBaseCard<LaundryCardConfig> {
         { name: 'completion_entity', selector: { entity: { domain: 'sensor', device_class: 'timestamp' } } },
         { name: 'remaining_entity', selector: { entity: { domain: 'sensor' } } },
         { name: 'notify_entity', selector: { entity: { domain: ['input_boolean', 'switch'] } } },
+        { name: 'notify_label', selector: { text: {} } },
+        listOf('stats', { entity: field.entity('エンティティ', {}, true), name: field.text('名前'), format: field.text('表示（例：あと {v}回分）') }, 'name', 'entity'),
+        listOf('steps', { state: field.texts('運転状態の値'), name: field.text('工程名', true) }, 'name'),
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -342,14 +344,9 @@ export class M3eLaundryCard extends M3eBaseCard<LaundryCardConfig> {
     return 6;
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.timer = setInterval(() => (this.now = Date.now()), 30_000);
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    clearInterval(this.timer);
+  /** Keeps "あと N分" fresh. */
+  protected override clockInterval(): number {
+    return 30_000;
   }
 
   /** Finish time (ms) from the timestamp sensor or the minutes left. */
@@ -372,7 +369,7 @@ export class M3eLaundryCard extends M3eBaseCard<LaundryCardConfig> {
     return unit ? `${s.state} ${unit}` : s.state;
   }
 
-  protected override render() {
+  protected renderCard() {
     const c = this.config;
     const s = this.stateObj(c.entity);
     const job = s?.state ?? 'unavailable';
@@ -385,17 +382,17 @@ export class M3eLaundryCard extends M3eBaseCard<LaundryCardConfig> {
     const stepName = current >= 0 ? `${steps[current].name}中` : running ? '運転中' : finished ? '終了' : '停止中';
     const statusLine = [stepName, running && course && !isUnavailable(this.stateObj(c.course_entity)) ? course : ''].filter(Boolean).join('・');
     const at = this.finishAt();
-    const left = at !== undefined ? Math.max(0, Math.round((at - this.now) / 60_000)) : undefined;
+    const left = at !== undefined ? Math.max(0, Math.round((at - this.clockNow) / 60_000)) : undefined;
     const power = this.stateObj(c.power_entity);
     const notify = this.stateObj(c.notify_entity);
     const name = c.name ?? (s?.attributes.friendly_name as string) ?? c.entity;
     const stats = this.stats();
     return html`<div class="card ${isUnavailable(s) ? 'unavailable' : ''}" data-accent=${running || finished ? nothing : 'neutral'}>
       <div class="header">
-        <m3e-shape .shape=${running ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 44} ?spin=${running} @click=${() => this.moreInfo(c.entity)}>
+        <m3e-shape .shape=${running ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 44} ?spin=${running} @click=${() => this.tapEntity(c.entity)}>
           <m3e-icon .icon=${c.icon ?? 'local-laundry-service'}></m3e-icon>
         </m3e-shape>
-        <div class="text" @click=${() => this.moreInfo(c.entity)}>
+        <div class="text" @click=${() => this.tapEntity(c.entity)}>
           <p class="name">${name}</p>
           <p class="state">${statusLine}</p>
         </div>

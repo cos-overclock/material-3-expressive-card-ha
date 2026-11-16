@@ -61,7 +61,7 @@ export function energySources(hass: HomeAssistant): Promise<EnergySources | unde
           .map((d) => ({ stat: d.stat_consumption, name: d.name }));
         return out;
       } catch (e) {
-        console.warn('m3e-cards: energy preferences unavailable', e);
+        console.warn('material-3-expressive-card: energy preferences unavailable', e);
         return undefined;
       }
     })();

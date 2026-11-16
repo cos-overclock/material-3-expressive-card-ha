@@ -1,7 +1,7 @@
 import { css, html, nothing } from 'lit';
-import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { hhmm, isUnavailable, numState } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -49,8 +49,6 @@ function startOfToday(now: number): number {
 export class M3ePresenceCard extends M3eBaseCard<PresenceCardConfig> {
   static override accentHint = '色を指定していない人のアイコンの色を変えます。在宅・帰宅中・外出のチップの色は変わりません。';
 
-  @state() private now = Date.now();
-  private timer?: ReturnType<typeof setInterval>;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -187,9 +185,23 @@ export class M3ePresenceCard extends M3eBaseCard<PresenceCardConfig> {
   static getConfigForm() {
     return {
       schema: [
-        { name: 'people', required: true, selector: { entity: { multiple: true, domain: 'person' } } },
+        listOf(
+          'people',
+          {
+            entity: field.entity('人', { domain: 'person' }, true),
+            name: field.text('名前'),
+            color: field.accent('アバターの色'),
+            initial: field.text('アバターの文字'),
+            eta_entity: field.entity('帰宅までの時間（分）のセンサー', { domain: 'sensor' }),
+            show_picture: field.boolean('写真を使う'),
+          },
+          'entity',
+          'name',
+          true,
+        ),
         { name: 'footnote', selector: { text: {} } },
       ],
+      toForm: (c: Record<string, unknown>) => idsToObjects(c, 'people'),
     };
   }
 
@@ -214,14 +226,9 @@ export class M3ePresenceCard extends M3eBaseCard<PresenceCardConfig> {
     return 1 + this.people().length;
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.timer = setInterval(() => (this.now = Date.now()), 60_000);
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    clearInterval(this.timer);
+  /** "今日" rolls over at midnight. */
+  protected override clockInterval(): number {
+    return 60_000;
   }
 
   private where(s: HassEntity | undefined, eta: number | undefined): Where {
@@ -235,7 +242,7 @@ export class M3ePresenceCard extends M3eBaseCard<PresenceCardConfig> {
     if (!s || w === 'unknown') return html`<span>${s ? '不明' : '見つかりません'}</span>`;
     const since = Date.parse(s.last_changed);
     if (w === 'home') {
-      return html`<span>${since >= startOfToday(this.now) ? `${hhmm(since)} に帰宅` : '今日は外出なし'}</span>`;
+      return html`<span>${since >= startOfToday(this.clockNow) ? `${hhmm(since)} に帰宅` : '今日は外出なし'}</span>`;
     }
     // In a zone the state is the zone's name; outside every zone it is not_home.
     const place = s.state === 'not_home' ? '' : s.state;
@@ -243,8 +250,8 @@ export class M3ePresenceCard extends M3eBaseCard<PresenceCardConfig> {
       return html`<m3e-icon icon="location-on"></m3e-icon><span>${place || '外出先'} → 自宅</span>`;
     }
     return place
-      ? html`<m3e-icon icon="location-on"></m3e-icon><span>${place}${since >= startOfToday(this.now) ? `・${hhmm(since)} から` : ''}</span>`
-      : html`<span>外出中${since >= startOfToday(this.now) ? `・${hhmm(since)} から` : ''}</span>`;
+      ? html`<m3e-icon icon="location-on"></m3e-icon><span>${place}${since >= startOfToday(this.clockNow) ? `・${hhmm(since)} から` : ''}</span>`
+      : html`<span>外出中${since >= startOfToday(this.clockNow) ? `・${hhmm(since)} から` : ''}</span>`;
   }
 
   private chip(w: Where, eta: number | undefined) {
@@ -257,7 +264,7 @@ export class M3ePresenceCard extends M3eBaseCard<PresenceCardConfig> {
     return nothing;
   }
 
-  protected override render() {
+  protected renderCard() {
     return html`<div class="card">
       ${repeat(
         this.people(),

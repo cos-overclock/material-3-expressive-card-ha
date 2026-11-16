@@ -1,7 +1,8 @@
 import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { field, listOf, objectOf } from '../editor/form-helpers';
 import { debounce, domainOf, isActive, isUnavailable, numState } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -404,10 +405,29 @@ export class M3eWaterHeaterCard extends M3eBaseCard<WaterHeaterCardConfig> {
         { name: 'entity', required: true, selector: { entity: { domain: 'water_heater' } } },
         { name: 'name', selector: { text: {} } },
         { name: 'burning_entity', selector: { entity: { domain: 'binary_sensor' } } },
-        { name: 'temperatures', selector: { object: {} } },
-        { name: 'fill', selector: { object: {} } },
-        { name: 'modes', selector: { object: {} } },
-        { name: 'usage', selector: { object: {} } },
+        listOf(
+          'temperatures',
+          { entity: field.entity('給湯器・数値のエンティティ', { domain: ['water_heater', 'number', 'input_number'] }, true), name: field.text('名前'), icon: field.icon() },
+          'name',
+          'entity',
+        ),
+        objectOf('fill', {
+          entity: field.entity('お湯はりの進み具合（%）', { domain: 'sensor' }, true),
+          remaining_entity: field.entity('残り時間（分）', { domain: 'sensor' }),
+          label: field.text('見出し'),
+        }),
+        listOf(
+          'modes',
+          {
+            entity: field.entity('スイッチ・ボタン', { domain: ['switch', 'input_boolean', 'button', 'input_button', 'script'] }, true),
+            name: field.text('名前'),
+            icon: field.icon(),
+          },
+          'name',
+          'entity',
+        ),
+        listOf('usage', { entity: field.entity('使用量のセンサー', { domain: 'sensor' }, true), name: field.text('名前') }, 'name', 'entity'),
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -519,7 +539,7 @@ export class M3eWaterHeaterCard extends M3eBaseCard<WaterHeaterCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const c = this.config;
     const s = this.stateObj(c.entity);
     const running = !!s && !RUNNING_OFF.has(s.state);
@@ -545,7 +565,7 @@ export class M3eWaterHeaterCard extends M3eBaseCard<WaterHeaterCardConfig> {
       })
       .filter(Boolean);
     return html`<div class="card" data-accent=${running ? nothing : 'neutral'}>
-      <div class="header" @click=${() => this.moreInfo(c.entity)}>
+      <div class="header" @click=${() => this.tapEntity(c.entity)}>
         <m3e-shape .shape=${running ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 44} ?spin=${burning}>
           <m3e-icon .icon=${c.icon ?? 'water-heater'}></m3e-icon>
         </m3e-shape>

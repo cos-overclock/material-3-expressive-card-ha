@@ -1,6 +1,6 @@
 import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { debounce, domainOf, isUnavailable } from '../ha/helpers';
 import { FAN_LABEL, HVAC_LABEL, SWING_LABEL, label } from '../ha/labels';
 import type { LovelaceGridOptions } from '../ha/types';
@@ -23,6 +23,28 @@ interface VaneOption {
 
 /** How a fan speed / vane row is set: auto picks a slider when the buttons don't fit. */
 export type ControlStyle = 'auto' | 'buttons' | 'slider';
+
+/** HA's standard preset_modes in Japanese; others show as reported. */
+const PRESET_LABEL: Record<string, string> = {
+  none: 'なし',
+  eco: 'エコ',
+  away: '外出',
+  boost: 'パワフル',
+  comfort: '快適',
+  home: '在宅',
+  sleep: 'おやすみ',
+  activity: '活動',
+};
+
+const PRESET_ICON: Record<string, string> = {
+  eco: 'eco',
+  away: 'flight',
+  boost: 'rocket-launch',
+  comfort: 'chair',
+  home: 'home',
+  sleep: 'bedtime',
+  activity: 'directions-walk',
+};
 
 export interface ClimateCardConfig extends BaseCardConfig {
   entity: string;
@@ -61,8 +83,10 @@ export interface ClimateCardConfig extends BaseCardConfig {
   fan_control?: ControlStyle;
   swing_control?: ControlStyle;
   swing_horizontal_control?: ControlStyle;
-  /** Override labels: { fan: {...}, swing: {...}, hvac: {...} } */
-  labels?: { fan?: Record<string, string>; swing?: Record<string, string>; hvac?: Record<string, string> };
+  /** Override labels: { fan: {...}, swing: {...}, hvac: {...}, preset: {...} } */
+  labels?: { fan?: Record<string, string>; swing?: Record<string, string>; hvac?: Record<string, string>; preset?: Record<string, string> };
+  /** Preset buttons (preset_modes: eco, sleep, boost…). Default true; shown only when the entity has presets. */
+  show_presets?: boolean;
   /** Explicit vertical vane buttons, e.g. [{mode: swing, label: スイング}, {mode: '1', angle: 0}, …] */
   vertical_vanes?: VaneOption[];
 }
@@ -211,6 +235,8 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
 
   @state() private expanded = false;
   @state() private pendingTarget?: number;
+  /** heat_cool: the low / high targets while −/+ are being pressed. */
+  @state() private pendingRange?: { low: number; high: number };
   /** Slider positions while dragging, and until HA reports the new value. */
   @state() private live: Partial<Record<RowKey, number>> = {};
   /** Card width (8px steps), to decide whether a row's buttons fit. */
@@ -220,6 +246,11 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
   private sendTarget = debounce((t: number) => {
     this.call('climate', 'set_temperature', { temperature: t }, this.config.entity);
     setTimeout(() => (this.pendingTarget = undefined), 1500);
+  }, 700);
+
+  private sendRange = debounce((r: { low: number; high: number }) => {
+    this.call('climate', 'set_temperature', { target_temp_low: r.low, target_temp_high: r.high }, this.config.entity);
+    setTimeout(() => (this.pendingRange = undefined), 1500);
   }, 700);
 
   static override styles = [
@@ -313,6 +344,50 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
       .temp-label {
         font: 500 12px / 18px var(--m3e-font-plain);
         color: var(--m3-on-surface-variant);
+      }
+      /* heat_cool: low and high targets side by side, each with its own −/+. */
+      .range {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .range .end {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        padding: 12px 8px;
+        border-radius: 16px;
+        background: var(--m3-surface-high);
+      }
+      .range .end[data-accent] {
+        background: var(--accent-container);
+        color: var(--accent-on-container);
+      }
+      .range .temp {
+        font: 600 44px / 48px var(--m3e-font-brand);
+      }
+      .range .temp-label {
+        color: inherit;
+        opacity: 0.8;
+      }
+      .range .steps {
+        display: flex;
+        gap: 8px;
+      }
+      .range .step {
+        width: 48px;
+        height: 40px;
+        border-radius: 12px;
+        background: var(--m3-surface-container);
+        color: var(--m3-on-surface);
+        --m3e-icon-size: 22px;
+      }
+      .range .step:active {
+        border-radius: 20px;
+      }
+      .presets {
+        --m3e-group-height: 40px;
       }
       .chips {
         display: flex;
@@ -523,6 +598,16 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
       :host([compact]) .temp-label {
         font: 500 11px / 14px var(--m3e-font-plain);
       }
+      :host([compact]) .range .temp {
+        font: 600 36px / 40px var(--m3e-font-brand);
+      }
+      :host([compact]) .range .step {
+        width: 44px;
+        height: 36px;
+      }
+      :host([compact]) .presets {
+        --m3e-group-height: 36px;
+      }
       :host([compact]) .modes {
         --m3e-group-height: 40px;
       }
@@ -570,6 +655,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         { name: 'humidity_entity', selector: { entity: { domain: 'sensor', device_class: 'humidity' } } },
         { name: 'show_fan_panel', default: true, selector: { boolean: {} } },
         { name: 'expanded', selector: { boolean: {} } },
+        { name: 'show_presets', default: true, selector: { boolean: {} } },
         ...ROW_KEYS.map((k) => ({
           name: `${k}_section`,
           type: 'expandable',
@@ -594,6 +680,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
             },
           ],
         })),
+        actionsSection(TAP_ACTION_FIELD),
       ],
       computeLabel: (s: { name: string }) => {
         const m = /^(?:show_)?(fan|swing_horizontal|swing)_(section|mode|mode_entity|auto_entity|control)$/.exec(s.name);
@@ -601,7 +688,10 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
           const t = ROW_TITLE[m[1] as RowKey];
           return { section: t, mode: `${t}を表示`, mode_entity: `${t}の設定エンティティ`, auto_entity: `${t}のオート・マニュアル切り替え`, control: `${t}の操作部` }[m[2]];
         }
-        return ({ show_fan_panel: '風量・風向を表示', expanded: '風量・風向を最初から開く' } as Record<string, string>)[s.name];
+        return ({ show_fan_panel: '風量・風向を表示', expanded: '風量・風向を最初から開く', show_presets: 'プリセット（エコ・おやすみなど）を表示' } as Record<
+          string,
+          string
+        >)[s.name];
       },
       computeHelper: (s: { name: string }) => {
         if (s.name.endsWith('_mode_entity')) return '省略するとエアコンのエンティティで設定します';
@@ -670,20 +760,50 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
     return this.stateObj(this.config.entity)?.attributes ?? {};
   }
 
+  /** Target temperature step: the entity's, else 1 for °F and 0.5 for °C. */
+  private get step(): number {
+    return this.attrs.target_temp_step ?? (this.attrs.temperature_unit === '°F' ? 1 : 0.5);
+  }
+
   private fmt(t: number | undefined): string {
     if (t == null || Number.isNaN(t)) return '—';
-    const step = this.attrs.target_temp_step ?? (this.attrs.temperature_unit === '°F' ? 1 : 0.5);
-    return `${step < 1 ? t.toFixed(1) : Math.round(t)}°`;
+    return `${this.step < 1 ? t.toFixed(1) : Math.round(t)}°`;
   }
 
   private nudge(dir: 1 | -1): void {
     const a = this.attrs;
-    const step = a.target_temp_step ?? 0.5;
+    const step = this.step;
     const cur = this.pendingTarget ?? a.temperature;
     if (cur == null) return;
     const next = Math.min(a.max_temp ?? 35, Math.max(a.min_temp ?? 7, Math.round((cur + dir * step) / step) * step));
     this.pendingTarget = next;
     this.sendTarget(next);
+  }
+
+  /** heat_cool: the entity reports a low and a high target instead of one temperature. */
+  private isRange(): boolean {
+    const a = this.attrs;
+    return a.target_temp_low != null && a.target_temp_high != null && a.temperature == null;
+  }
+
+  /** Move the low or high end of the range one step, keeping at least one step between them. */
+  private nudgeRange(end: 'low' | 'high', dir: 1 | -1): void {
+    const a = this.attrs;
+    const step = this.step;
+    const cur = this.pendingRange ?? { low: Number(a.target_temp_low), high: Number(a.target_temp_high) };
+    const min = a.min_temp ?? 7;
+    const max = a.max_temp ?? 35;
+    const snap = (t: number) => Math.round(t / step) * step;
+    const next = { ...cur };
+    if (end === 'low') next.low = Math.min(cur.high - step, Math.max(min, snap(cur.low + dir * step)));
+    else next.high = Math.max(cur.low + step, Math.min(max, snap(cur.high + dir * step)));
+    if (next.low === cur.low && next.high === cur.high) return;
+    this.pendingRange = next;
+    this.sendRange(next);
+  }
+
+  private setPreset(preset: string): void {
+    this.call('climate', 'set_preset_mode', { preset_mode: preset }, this.config.entity);
   }
 
   private setMode(mode: string): void {
@@ -1003,7 +1123,26 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  /** heat_cool: 下限 (heating below) and 上限 (cooling above), each with −/+. */
+  private renderRange(off: boolean) {
+    const a = this.attrs;
+    const r = this.pendingRange ?? { low: Number(a.target_temp_low), high: Number(a.target_temp_high) };
+    const end = (key: 'low' | 'high', title: string, accent: string) => html`<div class="end" data-accent=${off ? nothing : accent}>
+      <span class="temp-label">${title}</span>
+      <span class="temp"><m3e-rolling-text .text=${this.fmt(r[key])}></m3e-rolling-text></span>
+      <div class="steps">
+        <button class="icon-btn step" aria-label="${title}を下げる" ?disabled=${off} @click=${() => this.nudgeRange(key, -1)}>
+          <m3e-icon icon="remove"></m3e-icon>
+        </button>
+        <button class="icon-btn step" aria-label="${title}を上げる" ?disabled=${off} @click=${() => this.nudgeRange(key, 1)}>
+          <m3e-icon icon="add"></m3e-icon>
+        </button>
+      </div>
+    </div>`;
+    return html`<div class="range">${end('low', '暖房（下限）', 'peach')}${end('high', '冷房（上限）', 'blue')}</div>`;
+  }
+
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
     const a = this.attrs;
     const mode = s?.state ?? 'off';
@@ -1012,6 +1151,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
     const name = this.config.name ?? (a.friendly_name as string) ?? this.config.entity;
     const humidity = a.current_humidity ?? this.stateObj(this.config.humidity_entity)?.state;
     const modes = ((a.hvac_modes as string[]) ?? []).filter((m) => m !== 'off');
+    const presets = (a.preset_modes as string[] | undefined) ?? [];
     const target = this.pendingTarget ?? a.temperature;
     const groups = this.rows();
     const hasFan = groups.some((g) => g.key === 'fan');
@@ -1027,7 +1167,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         <m3e-shape
           .shape=${off ? 'circle' : 'cookie9'}
           size=${this.compact ? 36 : 44}
-          @click=${() => this.moreInfo(this.config.entity)}
+          @click=${() => this.tapEntity(this.config.entity)}
           aria-label="詳細"
         >
           <m3e-icon .icon=${MODE_ICON[mode] ?? 'thermostat'}></m3e-icon>
@@ -1041,7 +1181,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         </button>
       </div>
 
-      <div class="target">
+      ${this.isRange() ? this.renderRange(off) : html`<div class="target">
         <button class="icon-btn step minus" aria-label="温度を下げる" ?disabled=${off || target == null} @click=${() => this.nudge(-1)}>
           <m3e-icon icon="remove"></m3e-icon>
         </button>
@@ -1052,7 +1192,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         <button class="icon-btn step plus" aria-label="温度を上げる" ?disabled=${off || target == null} @click=${() => this.nudge(1)}>
           <m3e-icon icon="add"></m3e-icon>
         </button>
-      </div>
+      </div>`}
 
       <div class="chips" ?hidden=${this.compact}>
         ${a.current_temperature != null
@@ -1075,6 +1215,16 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
             }))}
             .value=${mode}
             @select=${(e: CustomEvent<{ value: string }>) => this.setMode(e.detail.value)}
+          ></m3e-button-group>`
+        : nothing}
+      ${presets.length && this.config.show_presets !== false
+        ? html`<m3e-button-group
+            class="presets"
+            label="プリセット"
+            .options=${presets.map((p) => ({ value: p, label: label(PRESET_LABEL, p, this.config.labels?.preset), icon: PRESET_ICON[p], iconWhenSelected: true }))}
+            .value=${a.preset_mode ?? ''}
+            ?disabled=${off}
+            @select=${(e: CustomEvent<{ value: string }>) => this.setPreset(e.detail.value)}
           ></m3e-button-group>`
         : nothing}
       ${groups.length

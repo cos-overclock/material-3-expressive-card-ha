@@ -1,6 +1,6 @@
 import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { areaName, isUnavailable } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -25,6 +25,8 @@ export interface CoverCardConfig extends BaseCardConfig {
   show_illustration?: boolean;
   /** Sky in the illustration: auto follows sun.sun. */
   sky?: 'auto' | 'day' | 'night';
+  /** full: the slat angle row for covers that tilt (blinds). Default true. */
+  show_tilt?: boolean;
 }
 
 // CoverEntityFeature
@@ -32,6 +34,11 @@ const OPEN = 1;
 const CLOSE = 2;
 const SET_POSITION = 4;
 const STOP = 8;
+const OPEN_TILT = 16;
+const CLOSE_TILT = 32;
+const STOP_TILT = 64;
+const SET_TILT_POSITION = 128;
+const TILT = OPEN_TILT | CLOSE_TILT | STOP_TILT | SET_TILT_POSITION;
 
 const supports = (s: HassEntity | undefined, f: number) => ((s?.attributes.supported_features ?? 0) & f) !== 0;
 
@@ -97,6 +104,9 @@ const kindOf = (s: HassEntity | undefined): 'curtain' | 'shade' | 'blind' => {
 export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
   /** Position under the finger while dragging the slider. */
   @state() private dragPos?: number;
+  /** Slat angle (0 closed – 100 open) while dragging and until HA reports it. */
+  @state() private tilt?: number;
+  private tiltTimer?: ReturnType<typeof setTimeout>;
   /** Position just requested, shown until HA reports it. */
   @state() private pendingPos?: number;
   private pendingTimer?: ReturnType<typeof setTimeout>;
@@ -238,6 +248,48 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
         --m3e-slider-handle: var(--m3-on-surface);
       }
 
+      /* ── slat angle (tilting blinds) ── */
+      .tilt {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .tilt-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font: 500 13px / 20px var(--m3e-font-plain);
+      }
+      .tilt-head .value {
+        color: var(--accent-fill);
+        font-variant-numeric: tabular-nums;
+      }
+      .tilt-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tilt-row m3e-slider {
+        flex: 1;
+        min-width: 0;
+        --m3e-slider-height: 40px;
+      }
+      .tilt-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: var(--m3-surface-high);
+        color: var(--m3-on-surface);
+        --m3e-icon-size: 20px;
+      }
+      .tilt-btn:active {
+        border-radius: 20px;
+      }
+      .tilt-btn[disabled] {
+        opacity: 0.38;
+        pointer-events: none;
+      }
+
       /* ── open / stop / close ── */
       .actions {
         display: flex;
@@ -341,6 +393,7 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
         pointer-events: none;
       }
       .mini .stop-glyph,
+      .tilt-btn .stop-glyph,
       .act .stop-glyph {
         width: 12px;
         height: 12px;
@@ -417,6 +470,8 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
         { name: 'name', selector: { text: {} } },
         { name: 'layout', selector: { select: { options: ['full', 'compact'] } } },
         { name: 'show_illustration', default: true, selector: { boolean: {} } },
+        { name: 'show_tilt', default: true, selector: { boolean: {} } },
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -462,6 +517,53 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
     this.call('cover', 'set_cover_position', { position: pos }, this.config.entity);
   }
 
+  private setTilt(pos: number): void {
+    this.tilt = pos;
+    clearTimeout(this.tiltTimer);
+    this.tiltTimer = setTimeout(() => (this.tilt = undefined), 4000);
+    this.call('cover', 'set_cover_tilt_position', { tilt_position: pos }, this.config.entity);
+  }
+
+  /** Slat angle: a slider when the angle can be set, and open / close (/ stop) buttons. */
+  private renderTilt(s: HassEntity | undefined, can: (f: number) => boolean) {
+    const reported = s?.attributes.current_tilt_position;
+    const value = this.tilt ?? (typeof reported === 'number' ? reported : undefined);
+    const tiltCmd = (service: string) => {
+      clearTimeout(this.tiltTimer);
+      this.tilt = undefined;
+      this.call('cover', service, {}, this.config.entity);
+    };
+    return html`<div class="tilt" data-accent=${this.config.color ?? 'lavender'}>
+      <div class="tilt-head">
+        <span>羽根の角度</span>
+        ${value !== undefined ? html`<span class="value">${Math.round(value)}%</span>` : nothing}
+      </div>
+      <div class="tilt-row">
+        <button class="icon-btn tilt-btn" aria-label="羽根を閉じる" ?disabled=${!can(CLOSE_TILT)} @click=${() => tiltCmd('close_cover_tilt')}>
+          <m3e-icon icon="rotate-left"></m3e-icon>
+        </button>
+        ${can(SET_TILT_POSITION) && value !== undefined
+          ? html`<m3e-slider
+              .value=${value}
+              min="0"
+              max="100"
+              label="羽根の角度"
+              @input=${(e: CustomEvent) => (this.tilt = e.detail.value)}
+              @change=${(e: CustomEvent) => this.setTilt(e.detail.value)}
+            ></m3e-slider>`
+          : html`<span style="flex:1"></span>`}
+        ${can(STOP_TILT)
+          ? html`<button class="icon-btn tilt-btn" aria-label="羽根を止める" @click=${() => tiltCmd('stop_cover_tilt')}>
+              <span class="stop-glyph"></span>
+            </button>`
+          : nothing}
+        <button class="icon-btn tilt-btn" aria-label="羽根を開く" ?disabled=${!can(OPEN_TILT)} @click=${() => tiltCmd('open_cover_tilt')}>
+          <m3e-icon icon="rotate-right"></m3e-icon>
+        </button>
+      </div>
+    </div>`;
+  }
+
   private command(entity: string, service: 'open_cover' | 'close_cover' | 'stop_cover'): void {
     if (entity === this.config.entity) {
       clearTimeout(this.pendingTimer);
@@ -475,6 +577,7 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
     // Drop the optimistic position once HA reports it (or stops moving).
     const s = this.stateObj(this.config.entity);
     if (this.pendingPos !== undefined && s && position(s) === this.pendingPos) this.pendingPos = undefined;
+    if (this.tilt !== undefined && s?.attributes.current_tilt_position === this.tilt) this.tilt = undefined;
   }
 
   private isDay(): boolean {
@@ -520,10 +623,10 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
         : `${open ? '開' : '閉'}${typeof pos === 'number' ? ` ${pos}%` : ''}`;
     const can = (f: number) => !off && (s!.attributes.supported_features === undefined || supports(s, f));
     return html`<div class="card row ${off ? 'unavailable' : ''}" data-accent=${open ? nothing : 'neutral'}>
-      <m3e-shape .shape=${open ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 40} @click=${() => this.moreInfo(entity)}>
+      <m3e-shape .shape=${open ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 40} @click=${() => this.tapEntity(entity)}>
         <m3e-icon .icon=${this.config.icon ?? coverIcon(s, open)}></m3e-icon>
       </m3e-shape>
-      <div class="text" @click=${() => this.moreInfo(entity)}>
+      <div class="text" @click=${() => this.tapEntity(entity)}>
         <p class="name">${name}</p>
         <p class="state">${area ? `${area}・` : ''}${st}</p>
       </div>
@@ -541,7 +644,7 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     if (this.isRow) return this.renderCompact();
     const s = this.stateObj(this.config.entity);
     const off = isUnavailable(s);
@@ -552,7 +655,7 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
     // Without supported_features (e.g. a template cover), offer everything.
     const can = (f: number) => !off && (s!.attributes.supported_features === undefined || supports(s, f));
     return html`<div class="card ${off ? 'unavailable' : ''}" data-accent=${open ? nothing : 'neutral'}>
-      <div class="header" @click=${() => this.moreInfo(this.config.entity)}>
+      <div class="header" @click=${() => this.tapEntity(this.config.entity)}>
         <m3e-shape .shape=${open ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 44}>
           <m3e-icon .icon=${this.config.icon ?? coverIcon(s, open)}></m3e-icon>
         </m3e-shape>
@@ -579,6 +682,7 @@ export class M3eCoverCard extends M3eBaseCard<CoverCardConfig> {
             }}
           ></m3e-slider>`
         : nothing}
+      ${this.config.show_tilt !== false && supports(s, TILT) ? this.renderTilt(s, (f) => !off && supports(s, f)) : nothing}
       <div class="actions" data-accent=${this.config.color ?? 'lavender'}>
         <button class="icon-btn act open" ?disabled=${!can(OPEN)} @click=${() => this.command(this.config.entity, 'open_cover')}>
           <m3e-icon .icon=${coverIcon(s, true)}></m3e-icon>開ける

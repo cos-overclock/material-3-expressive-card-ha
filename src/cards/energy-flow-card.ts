@@ -297,6 +297,11 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
     return config;
   }
 
+  /** willUpdate refetches once REFRESH_MS has passed; the clock makes sure it runs. */
+  protected override clockInterval(): number {
+    return 60_000;
+  }
+
   protected watchedEntities(): string[] {
     return [this.config.battery_entity].filter(Boolean) as string[];
   }
@@ -403,7 +408,7 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
     return `left:${(x / VB_W) * 100}%;top:calc(${(y / VB_H) * 100}% - ${radius + 2}px * var(--k, 1))`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const f = this.f;
     const soc = numState(this.stateObj(this.config.battery_entity));
     const head = html`<div class="head">

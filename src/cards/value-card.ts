@@ -1,5 +1,6 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
-import { M3eBaseCard, PressGesture, press, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, press, PressGesture, type BaseCardConfig } from './base-card';
+import { levelsField } from '../editor/form-helpers';
 import { DEVICE, levelFor, sensorLevels, type SensorLevel } from './sensor-card';
 import { defaultAccentFor, defaultIconFor } from '../ha/domain';
 import { domainOf, isUnavailable } from '../ha/helpers';
@@ -92,8 +93,9 @@ const BOOL_CLASS: Record<string, [string, string, Accent, string]> = {
 export class M3eValueCard extends M3eBaseCard<ValueCardConfig> {
   private gesture = new PressGesture(
     this,
-    () => this.runAction(this.config.tap_action?.action ?? 'more-info', this.config.entity),
-    () => this.runAction(this.config.hold_action?.action ?? 'more-info', this.config.entity),
+    () => this.handleAction('tap', 'more-info'),
+    () => this.handleAction('hold', 'more-info'),
+    this.doubleTap,
   );
 
   static override styles = [
@@ -328,6 +330,8 @@ export class M3eValueCard extends M3eBaseCard<ValueCardConfig> {
         { name: 'decimals', selector: { number: { min: 0, max: 6, mode: 'box' } } },
         { name: 'min', selector: { number: { mode: 'box' } } },
         { name: 'max', selector: { number: { mode: 'box' } } },
+        levelsField(),
+        actionsSection(),
       ],
     };
   }
@@ -449,7 +453,7 @@ export class M3eValueCard extends M3eBaseCard<ValueCardConfig> {
     return DEVICE[dc]?.icon ?? 'sensors';
   }
 
-  protected override render() {
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
     const kind = this.kind(s);
     const missing = this.missing(s);

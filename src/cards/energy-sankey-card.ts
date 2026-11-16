@@ -1,6 +1,7 @@
 import { css, html, nothing, svg, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { areaName } from '../ha/helpers';
 import { addSeries, energySources, flows, kwh, mergeSources, range, statChanges, sum } from '../ha/energy';
 import type { LovelaceGridOptions } from '../ha/types';
@@ -287,7 +288,11 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
         { name: 'title', selector: { text: {} } },
         { name: 'period', selector: { select: { options: ['day', 'week', 'month'] } } },
         { name: 'max_devices', selector: { number: { min: 1, max: 10, mode: 'box' } } },
-        { name: 'areas', selector: { object: {} } },
+        listOf(
+          'areas',
+          { name: field.text('エリア名', true), color: field.accent(), devices: field.entities('機器（エネルギーのセンサー）', { domain: 'sensor' }) },
+          'name',
+        ),
       ],
     };
   }
@@ -295,6 +300,11 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
   protected normalizeConfig(config: EnergySankeyCardConfig): EnergySankeyCardConfig {
     if (config.period) this.period = config.period;
     return config;
+  }
+
+  /** willUpdate refetches once REFRESH_MS has passed; the clock makes sure it runs. */
+  protected override clockInterval(): number {
+    return 60_000;
   }
 
   protected watchedEntities(): string[] {
@@ -517,7 +527,7 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
     return svg`${ribbons}${bars}${labels}`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const l = this.shown;
     return html`<div class="card">
       <div class="head">

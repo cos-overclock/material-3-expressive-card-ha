@@ -1,4 +1,4 @@
-# Home Assistant theme matching the M3E cards (Catppuccin Latte / Mocha).
+# Home Assistant theme matching the Material 3 Expressive Card (Catppuccin Latte / Mocha).
 # Copy into <config>/themes/ and add to configuration.yaml:
 #
 #   frontend:
@@ -9,6 +9,10 @@
 #
 # Optional: add `m3e-density: compact` (or `comfortable`) under a mode to fix the
 # density of every m3e card. Without it, cards are compact on phones and tablets.
+#
+# Optional: `m3e-fonts` sets where the cards load their fonts from. Unset: Google
+# Fonts. `none`: nothing (system fonts; for installs without internet). A URL such
+# as `/local/fonts/m3e-fonts.css`: your own stylesheet with the @font-face rules.
 M3E Catppuccin:
   modes:
     light:

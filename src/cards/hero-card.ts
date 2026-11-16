@@ -2,19 +2,14 @@ import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
 import { WEATHER_ICON, WEATHER_LABEL, WEEKDAY } from '../ha/labels';
+import { entityIdsOfDomain } from '../ha/helpers';
+import { ForecastSubscriptions, upcoming, type Forecast, type ForecastType } from '../ha/weather';
 import type { LovelaceGridOptions } from '../ha/types';
 import { define } from '../components/define';
 import '../components/m3e-icon';
 import '../components/m3e-shape';
 import '../components/m3e-rolling-text';
 
-interface Forecast {
-  datetime: string;
-  condition?: string;
-  temperature?: number;
-  templow?: number;
-  precipitation_probability?: number;
-}
 
 export interface HeroCardConfig extends BaseCardConfig {
   /** full: the overview hero (default). footer: a two-row (120px) bar for the view footer. */
@@ -28,8 +23,10 @@ export interface HeroCardConfig extends BaseCardConfig {
   lights?: string[];
   /** People counted for the presence chip (default: every person.*). */
   people?: string[];
-  /** Days of forecast. Default 5 (full) / 3 (footer, shown when the bar is 520px or wider). */
+  /** Days of forecast. Default 5 (full) / 3 (footer, shown when the bar is 520px or wider). With hourly: hours. */
   forecast_days?: number;
+  /** daily (default): the next days. hourly: the next hours ("15時"). */
+  forecast_type?: 'daily' | 'hourly';
 }
 
 /**
@@ -49,8 +46,11 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
   @state() private now = new Date();
   @state() private forecast: Forecast[] = [];
   private tick?: ReturnType<typeof setTimeout>;
-  private unsub?: Promise<() => void>;
-  private subscribedFor?: string;
+  @state() private hourly: Forecast[] = [];
+  private forecasts = new ForecastSubscriptions((type, list) => {
+    if (type === 'hourly') this.hourly = list;
+    else this.forecast = list;
+  });
 
   static override styles = [
     M3eBaseCard.styles,
@@ -372,7 +372,19 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
         { name: 'weather', selector: { entity: { domain: 'weather' } } },
         { name: 'title', selector: { text: {} } },
         { name: 'subtitle', selector: { text: {} } },
-        { name: 'forecast_days', selector: { number: { min: 0, max: 7, mode: 'box' } } },
+        { name: 'forecast_days', selector: { number: { min: 0, max: 12, mode: 'box' } } },
+        {
+          name: 'forecast_type',
+          selector: {
+            select: {
+              mode: 'dropdown',
+              options: [
+                { value: 'daily', label: '日ごと（既定）' },
+                { value: 'hourly', label: '1時間ごと' },
+              ],
+            },
+          },
+        },
       ],
     };
   }
@@ -382,9 +394,8 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
   }
 
   protected watchedEntities(): string[] {
-    const ids = Object.keys(this.hass?.states ?? {});
-    const people = this.config.people ?? ids.filter((id) => id.startsWith('person.'));
-    const lights = this.config.title ? [] : (this.config.lights ?? ids.filter((id) => id.startsWith('light.')));
+    const people = this.config.people ?? entityIdsOfDomain(this.hass, 'person');
+    const lights = this.config.title ? [] : (this.config.lights ?? entityIdsOfDomain(this.hass, 'light'));
     return [this.config.weather ?? '', ...people, ...lights].filter(Boolean);
   }
 
@@ -411,11 +422,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const schedule = () => {
-      this.now = new Date();
-      this.tick = setTimeout(schedule, 60_000 - (Date.now() % 60_000) + 50);
-    };
-    schedule();
+    this.startTick();
     this.subscribe();
   }
 
@@ -425,8 +432,24 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     this.unsubscribe();
   }
 
+  protected override visibilityChanged(): void {
+    this.startTick();
+  }
+
+  /** Update the clock on each minute boundary while the page is visible. */
+  private startTick(): void {
+    clearTimeout(this.tick);
+    this.tick = undefined;
+    if (!this.pageVisible) return;
+    const schedule = () => {
+      this.now = new Date();
+      this.tick = setTimeout(schedule, 60_000 - (Date.now() % 60_000) + 50);
+    };
+    schedule();
+  }
+
   protected override shouldUpdate(changed: Map<PropertyKey, unknown>): boolean {
-    return changed.has('now') || changed.has('forecast') || super.shouldUpdate(changed as never);
+    return changed.has('now') || changed.has('forecast') || changed.has('hourly') || super.shouldUpdate(changed as never);
   }
 
   protected override updated(changed: Map<PropertyKey, unknown>): void {
@@ -434,32 +457,24 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     if (changed.has('hass') || changed.has('config')) this.subscribe();
   }
 
+  /** Daily for today's high / low (and the days row); hourly too when the row shows hours. */
   private subscribe(): void {
-    const id = this.config?.weather;
-    if (!id || !this.hass?.connection || this.subscribedFor === id) return;
-    this.unsubscribe();
-    this.subscribedFor = id;
-    this.unsub = this.hass.connection.subscribeMessage<{ forecast: Forecast[] }>(
-      (msg) => (this.forecast = msg.forecast ?? []),
-      { type: 'weather/subscribe_forecast', forecast_type: 'daily', entity_id: id },
-    );
-    this.unsub.catch(() => (this.subscribedFor = undefined));
+    const types: ForecastType[] = this.config?.forecast_type === 'hourly' ? ['daily', 'hourly'] : ['daily'];
+    this.forecasts.sync(this.hass, this.config?.weather, types);
   }
 
   private unsubscribe(): void {
-    this.unsub?.then((fn) => fn()).catch(() => {});
-    this.unsub = undefined;
-    this.subscribedFor = undefined;
+    this.forecasts.stop();
   }
 
   private defaultTitle(): string {
-    const ids = this.config.lights ?? Object.keys(this.hass?.states ?? {}).filter((id) => id.startsWith('light.'));
+    const ids = this.config.lights ?? entityIdsOfDomain(this.hass, 'light');
     const on = ids.filter((id) => this.stateObj(id)?.state === 'on').length;
     return on ? `照明${on}つ点灯中` : '照明はすべて消灯';
   }
 
   private presence() {
-    const ids = this.config.people ?? Object.keys(this.hass?.states ?? {}).filter((id) => id.startsWith('person.'));
+    const ids = this.config.people ?? entityIdsOfDomain(this.hass, 'person');
     if (!ids.length) return nothing;
     const home = ids.filter((id) => this.stateObj(id)?.state === 'home').length;
     return html`<span class="chip" data-accent=${home ? 'green' : 'neutral'}>
@@ -488,14 +503,16 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
   }
 
   private days() {
+    const hourly = this.config.forecast_type === 'hourly';
     const n = this.config.forecast_days ?? (this.footer ? 3 : 5);
-    const list = this.forecast.slice(1, n + 1);
+    const list = hourly ? upcoming(this.hourly).slice(1, n + 1) : this.forecast.slice(1, n + 1);
     if (!n || !list.length) return nothing;
     return html`<div class="days">
       ${list.map((f) => {
         const [icon, accent] = WEATHER_ICON[f.condition ?? ''] ?? ['cloud', 'neutral'];
+        const t = new Date(f.datetime);
         return html`<div class="day">
-          <span class="dow">${WEEKDAY[new Date(f.datetime).getDay()]}</span>
+          <span class="dow">${hourly ? `${t.getHours()}時` : WEEKDAY[t.getDay()]}</span>
           <m3e-icon .icon=${icon} data-accent=${accent}></m3e-icon>
           <span class="hi">${f.temperature != null ? `${Math.round(f.temperature)}°` : '—'}</span>
           <span class="lo">${f.templow != null ? `${Math.round(f.templow)}°` : ''}</span>
@@ -572,7 +589,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const d = this.now;
     const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     if (this.footer) return this.renderFooter(d, time);

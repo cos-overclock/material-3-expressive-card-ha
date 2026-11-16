@@ -2,6 +2,7 @@ import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { hhmm } from '../ha/helpers';
 import type { LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -299,11 +300,21 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   static getConfigForm() {
     return {
       schema: [
-        { name: 'calendars', selector: { entity: { multiple: true, domain: 'calendar' } } },
+        listOf(
+          'calendars',
+          {
+            entity: field.entity('カレンダー', { domain: 'calendar' }, true),
+            person: field.text('アバターの文字（例：そ）'),
+            color: field.accent(),
+          },
+          'entity',
+          'person',
+        ),
         { name: 'days', selector: { number: { min: 1, max: 7, mode: 'box' } } },
         { name: 'todo', selector: { entity: { domain: 'todo' } } },
         { name: 'show_completed', selector: { number: { min: 0, max: 20, mode: 'box' } } },
       ],
+      toForm: (c: Record<string, unknown>) => idsToObjects(c, 'calendars'),
     };
   }
 
@@ -317,6 +328,11 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
       const ref = typeof c === 'string' ? { entity: c } : c;
       return { ...ref, color: ref.color ?? this.config.color ?? COLORS[i % COLORS.length] };
     });
+  }
+
+  /** Refetch events every REFRESH_MS and roll "today / tomorrow" over at midnight. */
+  protected override clockInterval(): number {
+    return 60_000;
   }
 
   protected watchedEntities(): string[] {
@@ -519,7 +535,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
             </button>`}`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const hasCals = this.cals().length > 0;
     return html`<div class="card">
       ${hasCals ? this.renderEvents() : nothing}

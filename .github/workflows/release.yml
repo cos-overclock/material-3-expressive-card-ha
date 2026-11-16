@@ -1,0 +1,27 @@
+# Publishing a GitHub release builds dist/material-3-expressive-card.js and attaches it, which is
+# where HACS downloads it from. The tag should match package.json's version (v0.2.0).
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check the tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "${{ github.event.release.tag_name }}"
+      - run: npm run build
+      - run: gh release upload "${{ github.event.release.tag_name }}" dist/material-3-expressive-card.js --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -21,6 +21,13 @@ import './cards/laundry-card';
 import './cards/garbage-card';
 import './cards/agenda-card';
 import './cards/value-card';
+import './cards/fan-card';
+import './cards/control-card';
+import './cards/area-card';
+import './cards/maintenance-card';
+import './cards/remote-card';
+import './cards/timer-card';
+import './cards/weather-card';
 import { SUGGESTIONS, type EntitySuggestion } from './suggestions';
 
 declare global {
@@ -36,7 +43,8 @@ declare global {
   }
 }
 
-const VERSION = '0.1.0';
+/** From package.json at build time (vite `define`). */
+const VERSION = __M3E_VERSION__;
 
 const CARDS = [
   ['m3e-heading-card', 'M3E 見出し', 'セクション見出し。アイコン・タイトル・センサー値'],
@@ -62,6 +70,13 @@ const CARDS = [
   ['m3e-agenda-card', 'M3E 予定と買い物リスト', 'カレンダーの予定と、チェックできる To-do リスト'],
   ['m3e-lock-card', 'M3E 鍵', '長押しで解錠・タップで施錠。暗証番号のテンキー、ドアを開けるボタン。1行表示も'],
   ['m3e-value-card', 'M3E 値', 'Bool（オン/オフ・開/閉など）や数値をそのまま表示する小さなカード。1/3 幅のミニ表示も'],
+  ['m3e-fan-card', 'M3E 扇風機・空気清浄機・加湿器', '風量・モード・首振り、加湿器は目標湿度'],
+  ['m3e-control-card', 'M3E 選択・数値', 'select の選択肢をボタンで、number の値をスライダーや −/＋ で'],
+  ['m3e-area-card', 'M3E 部屋', 'エリアの温度・湿度、点灯中の照明、人感・窓・エアコンをひと目で'],
+  ['m3e-maintenance-card', 'M3E メンテナンス', '電池残量の少ない機器・アップデート・利用できないエンティティ'],
+  ['m3e-remote-card', 'M3E テレビのリモコン', '方向キー・戻る・ホーム・音量・チャンネル・入力の切り替え'],
+  ['m3e-timer-card', 'M3E タイマー', 'タイマーの残り時間、スタート・一時停止、すぐ始めるプリセット'],
+  ['m3e-weather-card', 'M3E 天気', '今の天気、1時間ごと・日ごとの予報'],
 ] as const;
 
 window.customCards = window.customCards ?? [];
@@ -71,4 +86,4 @@ for (const [type, name, description] of CARDS) {
   }
 }
 
-console.info(`%c M3E-CARDS %c ${VERSION} `, 'background:#8839EF;color:#fff;border-radius:4px 0 0 4px;padding:2px 4px', 'background:#E6E9EF;color:#4C4F69;border-radius:0 4px 4px 0;padding:2px 4px');
+console.info(`%c MATERIAL 3 EXPRESSIVE CARD %c ${VERSION} `, 'background:#8839EF;color:#fff;border-radius:4px 0 0 4px;padding:2px 4px', 'background:#E6E9EF;color:#4C4F69;border-radius:0 4px 4px 0;padding:2px 4px');

@@ -2,6 +2,7 @@ import { css, html, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { SPRINGS, springTransition } from '../motion/spring';
 import { domainOf } from '../ha/helpers';
 import type { LovelaceGridOptions } from '../ha/types';
@@ -144,7 +145,14 @@ export class M3eScenesCard extends M3eBaseCard<ScenesCardConfig> {
     return {
       schema: [
         { name: 'title', selector: { text: {} } },
-        { name: 'scenes', selector: { object: {} } },
+        listOf(
+          'scenes',
+          { entity: field.entity('シーン・スクリプト', { domain: ['scene', 'script'] }, true), name: field.text('名前'), icon: field.icon(), color: field.accent() },
+          'entity',
+          'name',
+          true,
+        ),
+        { name: 'active_hours', selector: { number: { min: 1, max: 48, mode: 'box' } } },
       ],
     };
   }
@@ -155,6 +163,11 @@ export class M3eScenesCard extends M3eBaseCard<ScenesCardConfig> {
       ...config,
       scenes: config.scenes.map((s) => (typeof s === 'string' ? { entity: s } : s)),
     };
+  }
+
+  /** A scene stops counting as "recent" after active_hours without any state change. */
+  protected override clockInterval(): number {
+    return 60_000;
   }
 
   protected watchedEntities(): string[] {
@@ -198,7 +211,7 @@ export class M3eScenesCard extends M3eBaseCard<ScenesCardConfig> {
     this.lastActive = active ?? '';
   }
 
-  protected override render() {
+  protected renderCard() {
     const active = this.activeEntity();
     return html`<div class="card">
       ${this.config.title !== '' ? html`<p class="title">${this.config.title ?? 'シーン'}</p>` : ''}

@@ -300,6 +300,49 @@ SECTIONS.push([
   { type: 'custom:m3e-value-card', entity: 'input_boolean.laundry_notify', name: '洗濯の通知', layout: 'row', tap_action: { action: 'toggle' } },
 ]);
 
+// Added in the review round: new cards and the new options of existing ones.
+SECTIONS.push([
+  { type: 'custom:m3e-heading-card', title: '部屋', icon: 'meeting-room', tap_action: { action: 'navigate', navigation_path: '/lovelace/rooms' } },
+  { type: 'custom:m3e-area-card', area: 'living' },
+  { type: 'custom:m3e-area-card', area: 'bedroom', color: 'lavender' },
+  { type: 'custom:m3e-heading-card', title: '空気', icon: 'air' },
+  { type: 'custom:m3e-fan-card', entity: 'fan.living_purifier', sensors: ['sensor.living_pm25'] },
+  { type: 'custom:m3e-fan-card', entity: 'fan.living_circulator' },
+  { type: 'custom:m3e-fan-card', entity: 'humidifier.bedroom', sensors: ['sensor.bedroom_humidity'] },
+]);
+
+SECTIONS.push([
+  { type: 'custom:m3e-heading-card', title: '操作', icon: 'tune' },
+  { type: 'custom:m3e-control-card', entity: 'input_select.house_mode', icon: 'home' },
+  { type: 'custom:m3e-control-card', entity: 'input_select.wakeup_sound', icon: 'notifications-active' },
+  { type: 'custom:m3e-control-card', entity: 'input_number.speaker_volume', icon: 'volume-up' },
+  { type: 'custom:m3e-control-card', entity: 'number.bath_temperature', control: 'buttons', icon: 'hot-tub' },
+  { type: 'custom:m3e-control-card', entity: 'input_number.speaker_volume', layout: 'row', icon: 'volume-up' },
+  { type: 'custom:m3e-timer-card', entity: 'timer.kitchen', presets: ['1:00', '3:00', '5:00', '10:00'] },
+]);
+
+SECTIONS.push([
+  { type: 'custom:m3e-heading-card', title: 'テレビ・天気', icon: 'tv' },
+  { type: 'custom:m3e-remote-card', entity: 'media_player.living_tv', remote_entity: 'remote.living_tv', preset: 'android_tv' },
+  { type: 'custom:m3e-weather-card', entity: 'weather.home' },
+  { type: 'custom:m3e-hero-card', layout: 'footer', weather: 'weather.home', forecast_type: 'hourly', forecast_days: 4 },
+]);
+
+SECTIONS.push([
+  { type: 'custom:m3e-heading-card', title: '追加した機能', icon: 'build' },
+  { type: 'custom:m3e-maintenance-card' },
+  { type: 'custom:m3e-alarm-card', entity: 'alarm_control_panel.home', show_actions: true },
+  { type: 'custom:m3e-climate-card', entity: 'climate.kids_ac' },
+  { type: 'custom:m3e-cover-card', entity: 'cover.study_blind' },
+  {
+    type: 'custom:m3e-media-card',
+    entity: 'media_player.living_speaker',
+    group_entities: ['media_player.kitchen_speaker'],
+  },
+  { type: 'custom:m3e-tile-card', entity: 'light.kitchen', double_tap_action: { action: 'more-info' } },
+  { type: 'custom:m3e-tile-card', entity: 'light.does_not_exist' },
+]);
+
 // ?flip=binary_sensor.back_door,… starts with those sensors switched (screenshots).
 for (const id of (new URLSearchParams(location.search).get('flip') ?? '').split(',').filter(Boolean)) {
   queueMicrotask(() => (window as unknown as { __hass: MockHass }).__hass.flip(id));
@@ -389,6 +432,18 @@ for (const section of SECTIONS) {
 
 hass.subscribe((h) => {
   for (const c of cards) c.hass = h;
+});
+
+// HA's frontend runs hass-action (navigate, perform-action…); the preview logs it and runs perform-action on the mock.
+window.addEventListener('hass-action', (e) => {
+  const { config } = (e as CustomEvent<{ config: { entity?: string; tap_action: Record<string, unknown> } }>).detail;
+  const action = config.tap_action;
+  console.info('[preview] hass-action', action);
+  const svc = (action.perform_action ?? action.service) as string | undefined;
+  if (action.action === 'perform-action' && svc) {
+    const [domain, service] = svc.split('.');
+    hass.snapshot().callService(domain, service, (action.data ?? {}) as Record<string, unknown>, action.target as never);
+  }
 });
 
 // ── toolbar ──────────────────────────────────────────────

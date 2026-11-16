@@ -2,11 +2,12 @@ import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { defaultIconFor, stateText } from '../ha/domain';
 import { formatSensor } from '../ha/format';
 import { domainOf, isUnavailable } from '../ha/helpers';
 import { summaryEntities, summaryText, type Summary } from '../ha/summary';
-import type { HassEntity, LovelaceGridOptions } from '../ha/types';
+import type { HassEntity, HomeAssistant, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-icon';
@@ -47,13 +48,14 @@ const DOMAIN_ACCENT: Record<string, Accent> = {
 };
 
 const asBadge = (b: string | Badge): Badge => (typeof b === 'string' ? { entity: b } : b);
-const isEntity = (b: Badge): b is Badge & { entity: string } => 'entity' in b && typeof b.entity === 'string' && !('type' in b);
+// The editor may leave `type` empty on an entity badge.
+const isEntity = (b: Badge): b is Badge & { entity: string } => 'entity' in b && typeof b.entity === 'string' && !(b as { type?: string }).type;
 
-function entityValue(s: HassEntity | undefined): string {
+function entityValue(s: HassEntity | undefined, hass?: HomeAssistant): string {
   if (!s) return '—';
   if (domainOf(s.entity_id) === 'sensor') {
     // Same reading format as the headings: "21.8°", "48%", "1.24 kW".
-    return formatSensor(s);
+    return formatSensor(s, hass);
   }
   return stateText(s);
 }
@@ -163,9 +165,31 @@ export class M3eBadgesCard extends M3eBaseCard<BadgesCardConfig> {
   static getConfigForm() {
     return {
       schema: [
-        { name: 'badges', required: true, selector: { object: {} } },
+        listOf(
+          'badges',
+          {
+            entity: field.entity('エンティティ（1つを表示）'),
+            type: field.select('まとめ方（エンティティの代わり）', [
+              { value: 'count', label: '件数（count）' },
+              { value: 'average', label: '平均（average）' },
+            ]),
+            domain: field.text('数えるドメイン（count、例：light）'),
+            entities: field.entities('まとめるエンティティ'),
+            state: field.texts('数える状態（count、省略で「動いている」状態）'),
+            name: field.text('名前'),
+            icon: field.icon(),
+            color: field.accent(),
+            text: field.text('文言（{n}・{rest}・{total} が使える）'),
+            zero_text: field.text('0件のときの文言'),
+            decimals: field.number('小数点以下の桁数（average）', { min: 0, max: 3 }),
+          },
+          'name',
+          'entity',
+          true,
+        ),
         { name: 'align', selector: { select: { options: ['start', 'center', 'end'] } } },
       ],
+      toForm: (c: Record<string, unknown>) => idsToObjects(c, 'badges'),
     };
   }
 
@@ -202,7 +226,7 @@ export class M3eBadgesCard extends M3eBaseCard<BadgesCardConfig> {
         icon,
         accent,
         name: b.name ?? (s?.attributes.friendly_name as string) ?? b.entity,
-        value: b.text ?? entityValue(s),
+        value: b.text ?? entityValue(s, this.hass),
         entity: b.entity,
       };
     }
@@ -216,7 +240,7 @@ export class M3eBadgesCard extends M3eBaseCard<BadgesCardConfig> {
     };
   }
 
-  protected override render() {
+  protected renderCard() {
     return html`<div class="row ${this.config.align ?? ''}">
       ${repeat(
         this.badges(),

@@ -12,16 +12,22 @@ export type HassEntities = Record<string, HassEntity>;
 
 export interface HassServiceTarget {
   entity_id?: string | string[];
+  device_id?: string | string[];
+  area_id?: string | string[];
 }
 
 export interface HomeAssistant {
   states: HassEntities;
   themes?: { darkMode?: boolean; theme?: string };
   /** Entity / device / area registries (HA 2023.x+ frontend). */
-  entities?: Record<string, { entity_id: string; area_id?: string | null; device_id?: string | null }>;
+  entities?: Record<
+    string,
+    { entity_id: string; area_id?: string | null; device_id?: string | null; display_precision?: number; hidden?: boolean; entity_category?: string | null }
+  >;
   devices?: Record<string, { id: string; area_id?: string | null }>;
-  areas?: Record<string, { area_id: string; name: string }>;
+  areas?: Record<string, { area_id: string; name: string; icon?: string | null }>;
   locale?: { language: string };
+  user?: { id: string; name: string; is_admin?: boolean };
   language?: string;
   callService(domain: string, service: string, data?: Record<string, unknown>, target?: HassServiceTarget): Promise<unknown>;
   callWS?<T>(msg: Record<string, unknown>): Promise<T>;
@@ -46,9 +52,44 @@ export interface LovelaceGridOptions {
   max_rows?: number;
 }
 
-export type ActionType = 'toggle' | 'more-info' | 'none';
+/** Every action HA's frontend understands (`hass-action`). */
+export type ActionType =
+  | 'toggle'
+  | 'more-info'
+  | 'none'
+  | 'navigate'
+  | 'url'
+  | 'perform-action'
+  | 'call-service'
+  | 'assist'
+  | 'fire-dom-event';
+
+/** A Lovelace action, as written under tap_action / hold_action / double_tap_action. */
+export interface ActionConfig {
+  action: ActionType;
+  /** more-info: open this entity instead of the card's. */
+  entity?: string;
+  navigation_path?: string;
+  navigation_replace?: boolean;
+  url_path?: string;
+  perform_action?: string;
+  /** Pre-2024.8 name of perform_action. */
+  service?: string;
+  data?: Record<string, unknown>;
+  service_data?: Record<string, unknown>;
+  target?: HassServiceTarget;
+  pipeline_id?: string;
+  start_listening?: boolean;
+  /** Ask before running (HA shows its confirmation dialog). */
+  confirmation?: boolean | { text?: string; exemptions?: { user: string }[] };
+  [key: string]: unknown;
+}
 
 export interface ActionsConfig {
-  tap_action?: { action: ActionType };
-  hold_action?: { action: ActionType };
+  tap_action?: ActionConfig;
+  hold_action?: ActionConfig;
+  double_tap_action?: ActionConfig;
 }
+
+/** HA's `haptic` event values (the companion apps vibrate on them). */
+export type HapticType = 'success' | 'warning' | 'failure' | 'light' | 'medium' | 'heavy' | 'selection';

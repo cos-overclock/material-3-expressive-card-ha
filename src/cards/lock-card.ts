@@ -1,6 +1,6 @@
 import { css, html, nothing, svg, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { hhmm, isUnavailable, numState, relativeTime } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -8,6 +8,7 @@ import { SPRINGS, SpringValue, prefersReducedMotion } from '../motion/spring';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
+import '../components/m3e-keypad';
 
 export interface LockCardConfig extends BaseCardConfig {
   entity: string;
@@ -104,14 +105,11 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
   @state() private holding = false;
   @state() private confirm?: 'unlock' | 'open';
   @state() private pending: Pending;
-  @state() private pin = '';
   @state() private error = '';
-  @state() private now = Date.now();
   private holdRaf = 0;
   private holdStart = 0;
   private release = new SpringValue(0, SPRINGS.spatialFast, (v) => (this.hold = Math.max(0, v)));
   private confirmTimer?: ReturnType<typeof setTimeout>;
-  private clock?: ReturnType<typeof setInterval>;
   private lastPhase?: Phase;
 
   static override styles = [
@@ -301,75 +299,6 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
         min-height: 0;
         overflow: hidden;
       }
-      .pad {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding: 16px;
-        border-radius: 24px;
-        background: var(--m3-surface-high);
-      }
-      .pad-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font: 500 14px / 20px var(--m3e-font-plain);
-      }
-      .pad-head .err {
-        color: var(--acc-red);
-        font-weight: 400;
-        font-size: 13px;
-      }
-      .dots {
-        display: flex;
-        justify-content: center;
-        gap: 12px;
-        height: 16px;
-      }
-      .dots i {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        box-shadow: inset 0 0 0 2px var(--m3-outline);
-        transition:
-          background-color var(--m3e-effects-fast),
-          box-shadow var(--m3e-effects-fast),
-          transform var(--m3e-spatial-fast);
-      }
-      .dots i.on {
-        background: var(--m3-on-surface);
-        box-shadow: none;
-        transform: scale(1.15);
-      }
-      .keys {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 6px;
-      }
-      .key {
-        height: 52px;
-        border-radius: 16px;
-        background: var(--m3-surface-highest);
-        color: var(--m3-on-surface);
-        font: 500 22px / 1 var(--m3e-font-brand);
-        font-variant-numeric: tabular-nums;
-      }
-      .key:active {
-        border-radius: 26px;
-        transform: none;
-      }
-      .key.small {
-        font: 500 14px / 1 var(--m3e-font-plain);
-      }
-      .key.go {
-        background: var(--accent-fill);
-        color: var(--accent-on-fill);
-      }
-      .key[disabled] {
-        opacity: 0.38;
-        pointer-events: none;
-      }
-
       /* chips */
       .chips {
         display: flex;
@@ -525,19 +454,6 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
       :host([compact]) .fold.open {
         margin-top: 0;
       }
-      :host([compact]) .pad {
-        padding: 12px;
-        gap: 10px;
-        border-radius: 20px;
-      }
-      :host([compact]) .key {
-        height: 44px;
-        border-radius: 14px;
-        font-size: 20px;
-      }
-      :host([compact]) .key:active {
-        border-radius: 22px;
-      }
       :host([compact]) .chips {
         gap: 6px;
         flex-wrap: wrap;
@@ -565,6 +481,7 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
         { name: 'battery_entity', selector: { entity: { domain: 'sensor', device_class: 'battery' } } },
         { name: 'hold_to_unlock', default: true, selector: { boolean: {} } },
         { name: 'show_open', default: true, selector: { boolean: {} } },
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -593,15 +510,13 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     return this.isRow ? 1 : 4;
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    // Keeps "3分前" fresh.
-    this.clock = setInterval(() => (this.now = Date.now()), 30_000);
+  /** Keeps "3分前" fresh. */
+  protected override clockInterval(): number {
+    return 30_000;
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    clearInterval(this.clock);
     cancelAnimationFrame(this.holdRaf);
     this.release.stop();
   }
@@ -648,7 +563,8 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     this.error = '';
     if (this.needsCode()) {
       this.pending = { service };
-      this.pin = '';
+      this.keypad?.clear();
+      this.updateComplete.then(() => this.keypad?.focus());
       return;
     }
     this.send(service, this.config.code);
@@ -658,13 +574,13 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     try {
       await this.hass?.callService('lock', service, code ? { code } : {}, { entity_id: this.config.entity });
       this.pending = undefined;
-      this.pin = '';
+      this.keypad?.clear();
     } catch (e) {
       this.dropRing();
       this.error = (e as Error)?.message || '操作できませんでした';
       if (this.pending) {
-        this.pin = '';
-        this.shake('.pad');
+        this.keypad?.clear();
+        this.keypad?.shake();
       }
     }
   }
@@ -770,68 +686,32 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
 
   // ── keypad ────────────────────────────────────────────────
 
-  private press(k: string): void {
-    this.error = '';
-    if (k === 'clear') this.pin = this.pin.slice(0, -1);
-    else if (this.pin.length < 12) this.pin += k;
-  }
-
-  private submit(): void {
-    if (!this.pending || !this.pin) return;
-    this.send(this.pending.service, this.pin);
+  private get keypad() {
+    return this.renderRoot?.querySelector('m3e-keypad') ?? undefined;
   }
 
   private cancelPad(): void {
     this.pending = undefined;
-    this.pin = '';
     this.error = '';
+    this.keypad?.clear();
     this.dropRing();
   }
 
   private renderPad() {
     const open = !!this.pending;
     const verb = this.pending?.service === 'lock' ? '施錠' : this.pending?.service === 'open' ? 'ドアを開ける' : '解錠';
-    const numeric = this.numericCode();
     return html`<div class="fold ${open ? 'open' : ''}" ?inert=${!open}>
       <div>
-        <div class="pad" data-accent=${this.config.color ?? 'green'} @keydown=${(e: KeyboardEvent) => {
-          if (/^\d$/.test(e.key)) this.press(e.key);
-          else if (e.key === 'Backspace') this.press('clear');
-          else if (e.key === 'Enter') this.submit();
-          else if (e.key === 'Escape') this.cancelPad();
-        }}>
-          <div class="pad-head">
-            <span>${verb}の暗証番号</span>
-            ${this.error ? html`<span class="err" role="alert">${this.error}</span>` : nothing}
-          </div>
-          ${numeric
-            ? html`<div class="dots" aria-label="${this.pin.length}桁入力済み">
-                  ${Array.from({ length: Math.max(4, this.pin.length) }, (_, i) => html`<i class=${i < this.pin.length ? 'on' : ''}></i>`)}
-                </div>
-                <div class="keys">
-                  ${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(
-                    (k) => html`<button class="icon-btn key" @click=${() => this.press(k)}>${k}</button>`,
-                  )}
-                  <button class="icon-btn key small" @click=${this.cancelPad}>やめる</button>
-                  <button class="icon-btn key" @click=${() => this.press('0')}>0</button>
-                  ${this.pin
-                    ? html`<button class="icon-btn key go" aria-label=${verb} @click=${this.submit}><m3e-icon icon="check"></m3e-icon></button>`
-                    : html`<button class="icon-btn key small" disabled>${verb}</button>`}
-                </div>
-                ${this.pin ? html`<button class="icon-btn key small" style="height:36px" @click=${() => this.press('clear')}>1文字消す</button>` : nothing}`
-            : html`<input
-                  type="password"
-                  autocomplete="off"
-                  .value=${this.pin}
-                  @input=${(e: InputEvent) => (this.pin = (e.target as HTMLInputElement).value)}
-                  style="height:44px;border-radius:12px;border:1px solid var(--m3-outline);padding:0 12px;font:inherit;background:var(--m3-surface-container);color:var(--m3-on-surface)"
-                />
-                <div class="keys">
-                  <button class="icon-btn key small" @click=${this.cancelPad}>やめる</button>
-                  <span></span>
-                  <button class="icon-btn key go small" ?disabled=${!this.pin} @click=${this.submit}>${verb}</button>
-                </div>`}
-        </div>
+        <m3e-keypad
+          data-accent=${this.config.color ?? 'green'}
+          .verb=${verb}
+          .numeric=${this.numericCode()}
+          .error=${this.error}
+          ?compact=${this.compact}
+          @pin-input=${() => (this.error = '')}
+          @pin-submit=${(e: CustomEvent<{ code: string }>) => this.pending && this.send(this.pending.service, e.detail.code)}
+          @pin-cancel=${() => this.cancelPad()}
+        ></m3e-keypad>
       </div>
     </div>`;
   }
@@ -897,11 +777,11 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
         .shape=${locked ? 'circle' : phase === 'jammed' ? 'burst8' : 'cookie9'}
         size=${this.compact ? 36 : 40}
         ?spin=${phase === 'moving'}
-        @click=${() => this.moreInfo(this.config.entity)}
+        @click=${() => this.tapEntity(this.config.entity)}
       >
         <m3e-icon .icon=${locked || s?.state === 'locking' ? 'lock' : 'lock-open-right'}></m3e-icon>
       </m3e-shape>
-      <div class="text" @click=${() => this.moreInfo(this.config.entity)}>
+      <div class="text" @click=${() => this.tapEntity(this.config.entity)}>
         <p class="name">${name}</p>
         <p class="sub">${this.error ? html`<span class="err" role="alert">${this.error}</span>` : `${label}${when}`}</p>
       </div>
@@ -916,7 +796,7 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
     const phase = phaseOf(s);
     const name = this.config.name ?? (s?.attributes.friendly_name as string) ?? this.config.entity;
@@ -924,10 +804,10 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     const disabled = phase === 'off' || phase === 'moving';
     const canOpen =
       this.config.show_open !== false && ((s?.attributes.supported_features ?? 0) & SUPPORT_OPEN) !== 0 && phase !== 'off';
-    const since = s && !isUnavailable(s) ? `${hhmm(s.last_changed)}（${relativeTime(s.last_changed, this.now)}）` : '';
+    const since = s && !isUnavailable(s) ? `${hhmm(s.last_changed)}（${relativeTime(s.last_changed, this.clockNow)}）` : '';
     const ring = phase === 'locked' ? this.hold : this.confirm === 'unlock' ? 1 : 0;
     return html`<div class="card ${phase === 'off' ? 'unavailable' : ''}">
-      <div class="header" @click=${() => this.moreInfo(this.config.entity)}>
+      <div class="header" @click=${() => this.tapEntity(this.config.entity)}>
         <div class="text">
           <p class="name">${name}</p>
           <p class="sub">${since ? `${LABEL[s!.state] ?? s!.state}・${since}` : (LABEL[s?.state ?? ''] ?? '見つかりません')}</p>

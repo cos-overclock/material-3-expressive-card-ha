@@ -1,7 +1,8 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { hhmm, isActive, isUnavailable, relativeTime } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -80,11 +81,11 @@ function eventIcon(s: HassEntity | undefined, entity: string): string {
 export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
   @state() private src = '';
   @state() private prevSrc = '';
-  @state() private now = Date.now();
   @state() private pressed = '';
   @state() private failed = false;
   private refreshTimer?: ReturnType<typeof setInterval>;
-  private clockTimer?: ReturnType<typeof setInterval>;
+  /** False while the tab is hidden: the live stream is dropped and stills stop loading. */
+  @state() private visible = true;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -395,9 +396,15 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
         { name: 'name', selector: { text: {} } },
         { name: 'layout', selector: { select: { options: ['full', 'compact'] } } },
         { name: 'live', default: true, selector: { boolean: {} } },
-        { name: 'events', selector: { object: {} } },
+        listOf(
+          'events',
+          { entity: field.entity('エンティティ', {}, true), name: field.text('名前'), icon: field.icon(), color: field.accent() },
+          'name',
+          'entity',
+        ),
         { name: 'talk_entity', selector: { entity: { domain: ['switch', 'input_boolean'] } } },
         { name: 'time_entity', selector: { entity: {} } },
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -427,27 +434,44 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
     return this.config.layout === 'compact' ? 3 : 6;
   }
 
+  /** The overlay clock ticks every second; the thumbnail's "1分前" every 30s. */
+  protected override clockInterval(): number {
+    return this.config.layout === 'compact' ? 30_000 : 1000;
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
-    const compact = this.config?.layout === 'compact';
-    const every = (this.config?.refresh ?? (compact ? 30 : 10)) * 1000;
-    this.refreshTimer = setInterval(() => this.loadStill(), every);
-    this.clockTimer = setInterval(() => (this.now = Date.now()), compact ? 30_000 : 1000);
+    this.startRefresh();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     clearInterval(this.refreshTimer);
-    clearInterval(this.clockTimer);
+  }
+
+  protected override visibilityChanged(visible: boolean): void {
+    this.visible = visible;
+    if (visible) this.loadStill();
+    this.startRefresh();
+  }
+
+  /** Reload the still every `refresh` seconds while the page is visible. */
+  private startRefresh(): void {
+    clearInterval(this.refreshTimer);
+    this.refreshTimer = undefined;
+    if (!this.config || !this.pageVisible) return;
+    const every = (this.config.refresh ?? (this.config.layout === 'compact' ? 30 : 10)) * 1000;
+    this.refreshTimer = setInterval(() => this.loadStill(), every);
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
+    if ((changed as Map<string, unknown>).has('config') && this.isConnected) this.startRefresh();
     if (!this.src && this.hass) this.loadStill();
   }
 
   private streaming(): boolean {
-    return this.config.layout !== 'compact' && this.config.live !== false && !!customElements.get('ha-camera-stream');
+    return this.visible && this.config.layout !== 'compact' && this.config.live !== false && !!customElements.get('ha-camera-stream');
   }
 
   private pictureUrl(): string | undefined {
@@ -460,7 +484,7 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
 
   /** Preload the next frame, then swap it in so the old one can fade out. */
   private loadStill(): void {
-    if (this.streaming()) return;
+    if (this.streaming() || !this.pageVisible) return;
     const url = this.pictureUrl();
     if (!url) return;
     const img = new Image();
@@ -556,7 +580,7 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
   }
 
   private clock(): string {
-    const d = new Date(this.now);
+    const d = new Date(this.clockNow);
     return `${hhmm(d)}:${String(d.getSeconds()).padStart(2, '0')}`;
   }
 
@@ -572,7 +596,7 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
           const s = this.stateObj(e.entity);
           const t = eventTime(s);
           const active = isActive(s) && !e.entity.startsWith('event.');
-          const isRecent = active || (t !== undefined && this.now - t < recent);
+          const isRecent = active || (t !== undefined && this.clockNow - t < recent);
           const name = e.name ?? (s?.attributes.friendly_name as string) ?? e.entity;
           return html`<span
             class="chip ${isRecent ? 'recent' : ''}"
@@ -638,8 +662,8 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
   private renderCompact(s: HassEntity | undefined, name: string) {
     const ts = this.stateObj(this.config.time_entity);
     const t = eventTime(ts);
-    const when = t !== undefined ? relativeTime(new Date(t).toISOString(), this.now) : '';
-    return html`<div class="card compact" role="button" tabindex="0" @click=${() => this.moreInfo(this.config.entity)}>
+    const when = t !== undefined ? relativeTime(new Date(t).toISOString(), this.clockNow) : '';
+    return html`<div class="card compact" role="button" tabindex="0" @click=${() => this.tapEntity(this.config.entity)}>
       ${this.renderView(s, name, false)}
       <div class="meta">
         <span class="name">${name}</span>
@@ -648,7 +672,7 @@ export class M3eCameraCard extends M3eBaseCard<CameraCardConfig> {
     </div>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const s = this.stateObj(this.config.entity);
     const name = this.config.name ?? (s?.attributes.friendly_name as string) ?? this.config.entity;
     return this.config.layout === 'compact' ? this.renderCompact(s, name) : this.renderFull(s, name);

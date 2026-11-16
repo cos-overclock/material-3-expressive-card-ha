@@ -1,7 +1,8 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { hhmm, isUnavailable, numState } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -41,7 +42,35 @@ export interface VacuumCardConfig extends BaseCardConfig {
   last_clean_duration_entity?: string;
   filter_entity?: string;
   filter_name?: string;
+  /** Suction power chips (fan_speed_list). Default true; shown when the vacuum has speeds. */
+  show_fan_speed?: boolean;
 }
+
+// VacuumEntityFeature
+const FAN_SPEED = 32;
+const LOCATE = 512;
+
+/** Common fan_speed values in Japanese; others show as reported. */
+const FAN_SPEED_LABEL: Record<string, string> = {
+  off: 'オフ',
+  silent: '静か',
+  quiet: '静か',
+  gentle: '弱',
+  low: '弱',
+  min: '弱',
+  standard: '標準',
+  balanced: '標準',
+  medium: '中',
+  normal: '標準',
+  high: '強',
+  strong: '強',
+  turbo: 'ターボ',
+  max: '最大',
+  'max+': '最大+',
+  auto: '自動',
+  mop: 'モップ',
+  custom: 'カスタム',
+};
 
 const STATE_LABEL: Record<string, string> = {
   cleaning: '掃除中',
@@ -123,6 +152,16 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
       .state {
         font: 400 13px / 18px var(--m3e-font-plain);
         color: var(--m3-on-surface-variant);
+      }
+      .locate {
+        width: 40px;
+        height: 40px;
+        border-radius: 20px;
+        color: var(--m3-on-surface-variant);
+        --m3e-icon-size: 20px;
+      }
+      .locate:active {
+        border-radius: 12px;
       }
       .battery {
         display: inline-flex;
@@ -388,8 +427,20 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
         { name: 'entity', required: true, selector: { entity: { domain: 'vacuum' } } },
         { name: 'name', selector: { text: {} } },
         { name: 'battery_entity', selector: { entity: { domain: 'sensor', device_class: 'battery' } } },
-        { name: 'rooms', selector: { object: {} } },
+        listOf(
+          'rooms',
+          {
+            name: field.text('部屋の名前', true),
+            segment: field.text('部屋の ID（セグメント番号）'),
+            area: field.number('広さ（m²）', { min: 0 }),
+            selected: field.boolean('最初から選ぶ'),
+          },
+          'name',
+          'segment',
+        ),
         { name: 'room_service', selector: { text: {} } },
+        { name: 'show_fan_speed', default: true, selector: { boolean: {} } },
+        actionsSection(TAP_ACTION_FIELD),
       ],
     };
   }
@@ -466,6 +517,31 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
     }
   }
 
+  /** Suction power: one chip per fan_speed_list entry. */
+  private renderFanSpeed(off: boolean) {
+    const s = this.stateObj(this.config.entity);
+    const speeds = (s?.attributes.fan_speed_list as string[] | undefined) ?? [];
+    if (this.config.show_fan_speed === false || !speeds.length || !(Number(s?.attributes.supported_features ?? 0) & FAN_SPEED)) return nothing;
+    const current = s?.attributes.fan_speed as string | undefined;
+    return html`<div class="rooms" data-accent=${this.config.color ?? 'teal'}>
+      <div class="label"><span>吸引力</span><span>${current ? (FAN_SPEED_LABEL[current.toLowerCase()] ?? current) : ''}</span></div>
+      <div class="chips" role="radiogroup" aria-label="吸引力">
+        ${speeds.map((sp) => {
+          const on = sp === current;
+          return html`<button
+            class="icon-btn chip ${on ? 'on' : ''}"
+            role="radio"
+            aria-checked=${on ? 'true' : 'false'}
+            ?disabled=${off}
+            @click=${() => this.call('vacuum', 'set_fan_speed', { fan_speed: sp }, this.config.entity)}
+          >
+            ${on ? html`<m3e-icon icon="check"></m3e-icon>` : nothing}${FAN_SPEED_LABEL[sp.toLowerCase()] ?? sp}
+          </button>`;
+        })}
+      </div>
+    </div>`;
+  }
+
   private act(key: string, label: string, icon: unknown, onClick: () => void, opts: { primary?: boolean; disabled?: boolean } = {}) {
     return html`<button
       class="icon-btn act ${opts.primary ? 'primary' : ''} ${this.pressed === key ? 'pressed' : ''}"
@@ -480,7 +556,7 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
     </button>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     const c = this.config;
     const s = this.stateObj(c.entity);
     const st = s?.state ?? 'unavailable';
@@ -507,7 +583,7 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
         : `残り ${duration(filter)}`
       : '';
     return html`<div class="card ${off ? 'unavailable' : ''}" data-accent=${running || st === 'paused' ? nothing : 'neutral'}>
-      <div class="header" @click=${() => this.moreInfo(c.entity)}>
+      <div class="header" @click=${() => this.tapEntity(c.entity)}>
         <m3e-shape .shape=${running || st === 'paused' ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 44} ?spin=${st === 'cleaning'}>
           <m3e-icon icon="robot-vacuum"></m3e-icon>
         </m3e-shape>
@@ -517,6 +593,20 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
         </div>
         ${bat !== undefined
           ? html`<span class="battery ${bat <= 20 ? 'low' : ''}"><m3e-icon icon="battery-full"></m3e-icon>${Math.round(bat)}%</span>`
+          : nothing}
+        ${Number(s?.attributes.supported_features ?? 0) & LOCATE
+          ? html`<button
+              class="icon-btn locate"
+              aria-label="場所を音で知らせる"
+              title="場所を音で知らせる"
+              ?disabled=${off}
+              @click=${(e: Event) => {
+                e.stopPropagation();
+                this.call('vacuum', 'locate', {}, c.entity);
+              }}
+            >
+              <m3e-icon icon="my-location"></m3e-icon>
+            </button>`
           : nothing}
       </div>
 
@@ -563,6 +653,8 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
             </div>
           </div>`
         : nothing}
+
+      ${this.renderFanSpeed(off)}
 
       <div class="actions" data-accent=${c.color ?? 'teal'}>
         ${st === 'cleaning'

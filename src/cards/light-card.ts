@@ -1,6 +1,7 @@
 import { css, html, nothing, type TemplateResult } from 'lit';
 import { state } from 'lit/decorators.js';
-import { M3eBaseCard, PressGesture, press, type BaseCardConfig } from './base-card';
+import { M3eBaseCard, actionsSection, press, PressGesture, type BaseCardConfig } from './base-card';
+import { field, listOf } from '../editor/form-helpers';
 import { defaultIconFor } from '../ha/domain';
 import { brightnessPct, isUnavailable } from '../ha/helpers';
 import { hexToHs, hsToCss, hsToRgb, hueDistance, kelvinToCss, kelvinToUiRgb } from '../ha/color';
@@ -60,6 +61,8 @@ export interface LightCardConfig extends BaseCardConfig {
   show_presets?: boolean;
   /** Show the hue, saturation and colour-temperature sliders. Default true. */
   show_color_sliders?: boolean;
+  /** Effect picker (effect_list) in the color / temperature / full layouts. Default true. */
+  show_effects?: boolean;
 }
 
 const DEFAULT_COLOR_PRESETS: ColorPreset[] = [
@@ -115,12 +118,14 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
   @state() private live: { brightness?: number; hue?: number; sat?: number; kelvin?: number } = {};
   /** Tab picked by the user in the full layout; undefined follows the light's colour mode. */
   @state() private tab?: LightTab;
+  @state() private effectsOpen = false;
   private lastColorMode?: string;
 
   private gesture = new PressGesture(
     this,
-    () => this.runAction(this.config.tap_action?.action ?? 'toggle', this.config.entity),
-    () => this.runAction(this.config.hold_action?.action ?? 'more-info', this.config.entity),
+    () => this.handleAction('tap', 'toggle'),
+    () => this.handleAction('hold', 'more-info'),
+    this.doubleTap,
   );
 
   static override styles = [
@@ -400,6 +405,64 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
         font-variant-numeric: tabular-nums;
       }
 
+      .effects {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .effect-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        max-height: 176px;
+        overflow-y: auto;
+      }
+      .effect-chip {
+        all: unset;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 36px;
+        max-width: 100%;
+        padding: 6px 12px 6px 10px;
+        border-radius: 10px;
+        background: var(--m3-surface-high);
+        color: var(--m3-on-surface);
+        font: 500 13px / 18px var(--m3e-font-plain);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        transition:
+          border-radius var(--m3e-spatial-fast),
+          background-color var(--m3e-effects-default);
+      }
+      .effect-chip span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .effect-chip m3e-icon {
+        --m3e-icon-size: 18px;
+      }
+      .effect-chip.on {
+        background: var(--accent-container);
+        color: var(--accent-on-container);
+      }
+      .effect-chip:active {
+        border-radius: 18px;
+      }
+      .effect-chip:focus-visible {
+        outline: 2px solid var(--accent-fill);
+        outline-offset: 2px;
+      }
+      .effect-chip .chevron {
+        transition: transform var(--m3e-spatial-default);
+      }
+      .effect-chip.open .chevron {
+        transform: rotate(180deg);
+      }
+
       /* ---- compact density (phones and tablets) ---- */
       :host([compact]) {
         --m3e-slider-height: 36px;
@@ -498,12 +561,17 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
         { name: 'show_brightness', default: true, selector: { boolean: {} } },
         { name: 'show_presets', default: true, selector: { boolean: {} } },
         { name: 'show_color_sliders', default: true, selector: { boolean: {} } },
+        { name: 'show_effects', default: true, selector: { boolean: {} } },
+        listOf('presets', { color: field.text('色（#RRGGBB）', true), name: field.text('名前') }, 'name', 'color'),
+        listOf('temperature_presets', { kelvin: field.number('色温度（K）', { min: 1500, max: 9000, step: 100 }, true), name: field.text('名前') }, 'name', 'kelvin'),
+        actionsSection(),
       ],
       computeLabel: (s: { name: string }) =>
         ({
           show_brightness: '明るさスライダーを表示',
           show_presets: 'プリセットを表示',
           show_color_sliders: '色相・彩度・色温度スライダーを表示',
+          show_effects: 'エフェクトを表示',
         })[s.name],
     };
   }
@@ -861,6 +929,7 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
       ${show.presets ? this.foldable(on, this.colorPresetRow()) : nothing}
       ${show.brightness ? this.pinnedBrightness(on) : nothing}
       ${show.sliders ? this.foldable(on, html`<div class="sliders">${this.hueSatFields()}</div>`, show.brightness) : nothing}
+      ${this.effectsFold(on)}
     </div>`;
   }
 
@@ -878,6 +947,7 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
       ${show.presets ? this.foldable(on, this.tempPresetGroup()) : nothing}
       ${show.brightness ? this.pinnedBrightness(on) : nothing}
       ${show.sliders ? this.foldable(on, html`<div class="sliders">${this.kelvinField()}</div>`, show.brightness) : nothing}
+      ${this.effectsFold(on)}
     </div>`;
   }
 
@@ -933,6 +1003,49 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
               </div>`,
           )
         : nothing}
+      ${this.effectsFold(on)}
+    </div>`;
+  }
+
+  /** The effect picker, folded away with the other controls while the light is off. */
+  private effectsFold(on: boolean) {
+    const list = this.stateObj(this.config.entity)?.attributes.effect_list as string[] | undefined;
+    return this.config.show_effects === false || !list?.length ? nothing : this.foldable(on, html`${this.effects()}`);
+  }
+
+  /** Effect picker: a chip with the current effect that opens the list. */
+  private effects() {
+    const s = this.stateObj(this.config.entity);
+    const list = (s?.attributes.effect_list as string[] | undefined) ?? [];
+    if (this.config.show_effects === false || !list.length) return nothing;
+    const current = s?.attributes.effect as string | undefined;
+    const isNone = (e: string | undefined) => !e || /^(none|off|solid|なし)$/i.test(e);
+    return html`<div class="effects">
+      <button
+        class="effect-chip ${this.effectsOpen ? 'open' : ''} ${isNone(current) ? '' : 'on'}"
+        aria-expanded=${this.effectsOpen ? 'true' : 'false'}
+        @click=${() => (this.effectsOpen = !this.effectsOpen)}
+      >
+        <m3e-icon icon="wand-stars"></m3e-icon><span>エフェクト${isNone(current) ? '' : `：${current}`}</span>
+        <m3e-icon class="chevron" icon="keyboard-arrow-down"></m3e-icon>
+      </button>
+      ${this.effectsOpen
+        ? html`<div class="effect-list" role="listbox" aria-label="エフェクト">
+            ${list.map(
+              (e) => html`<button
+                class="effect-chip ${e === current ? 'on' : ''}"
+                role="option"
+                aria-selected=${e === current ? 'true' : 'false'}
+                @click=${() => {
+                  this.turnOn({ effect: e });
+                  this.effectsOpen = false;
+                }}
+              >
+                ${e === current ? html`<m3e-icon icon="check"></m3e-icon>` : nothing}<span>${e}</span>
+              </button>`,
+            )}
+          </div>`
+        : nothing}
     </div>`;
   }
 
@@ -981,7 +1094,7 @@ export class M3eLightCard extends M3eBaseCard<LightCardConfig> {
     ></m3e-switch>`;
   }
 
-  protected override render() {
+  protected renderCard() {
     switch (this.resolvedLayout) {
       case 'color':
         return this.renderColor();
