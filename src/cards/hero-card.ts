@@ -1,6 +1,7 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkEntity, checkNumber, checkOneOf, type Issue } from '../editor/validate';
 import { WEATHER_ICON, WEATHER_LABEL, WEEKDAY } from '../ha/labels';
 import { entityIdsOfDomain } from '../ha/helpers';
 import { ForecastSubscriptions, upcoming, type Forecast, type ForecastType } from '../ha/weather';
@@ -387,6 +388,15 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
         },
       ],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...checkEntity(c, 'weather', ['weather'], '天気'),
+      ...checkOneOf(c, 'layout', ['full', 'footer'], 'レイアウト'),
+      ...checkOneOf(c, 'forecast_type', ['daily', 'hourly'], '予報の種類'),
+      ...checkNumber(c, 'forecast_days', { min: 0, max: 14, integer: true, label: '予報の日数' }),
+    ];
   }
 
   protected normalizeConfig(config: HeroCardConfig): HeroCardConfig {

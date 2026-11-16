@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { formatSensor } from '../src/ha/format';
 import { debounce, entityIdsOfDomain, hhmm, numState, relativeTime } from '../src/ha/helpers';
 import { summaryText } from '../src/ha/summary';
-import { flows, kwh, range } from '../src/ha/energy';
+import { energySources, flows, kwh, PREFS_TTL_MS, range } from '../src/ha/energy';
 import { ruleHits } from '../src/ha/garbage-rules';
 import { formatDuration, hms, parseDuration, presetLabel } from '../src/ha/duration';
 import { upcoming } from '../src/ha/weather';
@@ -79,6 +79,10 @@ describe('helpers', () => {
     // Same count, but one id replaced by another: rescanned.
     const d = hassWith([ent('light.a', 'off'), ent('switch.b', 'off'), ent('light.z', 'on')]);
     expect(entityIdsOfDomain(d, 'light')).toEqual(['light.a', 'light.z']);
+    // Same count, the domain's ids all still there, but another domain's id replaced by one of this domain.
+    const e = hassWith([ent('light.a', 'off'), ent('light.z', 'on'), ent('light.c', 'on')]);
+    expect(entityIdsOfDomain(e, 'light')).toEqual(['light.a', 'light.z', 'light.c']);
+    expect(entityIdsOfDomain(e, 'switch')).toEqual([]);
   });
 
   it('debounce sends the last value once, and flush sends it now', () => {
@@ -116,6 +120,25 @@ describe('summaryText', () => {
     expect(summaryText(hass, { type: 'count', entities: ['cover.b'], state: 'open', text: '{n}か所', zero_text: 'すべて閉' })).toBe('すべて閉');
   });
 
+  it('never reads missing or unavailable entities as all clear', () => {
+    const h = hassWith([ent('lock.front', 'locked'), ent('lock.back', 'unavailable'), ent('binary_sensor.w', 'unknown')]);
+    const s = { type: 'count' as const, entities: ['lock.front', 'lock.back', 'binary_sensor.w', 'lock.gone'], state: 'unlocked', text: '{n}件を確認', zero_text: 'すべて正常' };
+    expect(summaryText(h, s)).toBe('3件不明');
+    expect(summaryText(h, { ...s, unknown_text: '通信不能 {unknown}' })).toBe('通信不能 3');
+    // Some match: the unknown count is added; {rest} only counts the known ones.
+    const open = hassWith([ent('lock.front', 'unlocked'), ent('lock.back', 'unavailable'), ent('lock.side', 'locked')]);
+    const t = { type: 'count' as const, entities: ['lock.front', 'lock.back', 'lock.side'], text: '{n}件・施錠 {rest}件', zero_text: 'すべて施錠' };
+    expect(summaryText(open, t)).toBe('1件・施錠 1件・1件不明');
+    expect(summaryText(open, { ...t, text: '{n}/{total}（不明 {unknown}）' })).toBe('1/3（不明 1）');
+    // All known and none matching: zero_text as before.
+    expect(summaryText(open, { ...t, entities: ['lock.side'] })).toBe('すべて施錠');
+  });
+
+  it('counts a listed "unavailable" state as matching, not unknown', () => {
+    const h = hassWith([ent('sensor.a', 'unavailable'), ent('sensor.b', 'ok')]);
+    expect(summaryText(h, { type: 'count', entities: ['sensor.a', 'sensor.b'], state: 'unavailable', text: '{n}台が応答なし', zero_text: 'すべて応答' })).toBe('1台が応答なし');
+  });
+
   it('averages with the unit', () => {
     expect(summaryText(hass, { type: 'average', entities: ['sensor.t1', 'sensor.t2'] })).toBe('21.5°');
     expect(summaryText(hass, { type: 'average', entities: ['sensor.f'], decimals: 0 })).toBe('70°F');
@@ -143,6 +166,31 @@ describe('energy', () => {
     expect(week.start.getDate()).toBe(16);
     expect(range('month', new Date(2026, 1, 10)).buckets).toBe(28);
     expect(range('day', new Date(2026, 10, 16, 8)).buckets).toBe(24);
+  });
+});
+
+describe('energySources', () => {
+  const prefs = { energy_sources: [{ type: 'solar', stat_energy_from: 'sensor.solar' }], device_consumption: [] };
+
+  it('asks HA again after a failed fetch', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const callWS = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue(prefs);
+    const hass = hassWith([], { callWS } as unknown as Partial<HomeAssistant>);
+    expect(await energySources(hass)).toBeUndefined();
+    expect((await energySources(hass))?.solar).toEqual(['sensor.solar']);
+    expect(callWS).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it('reuses the settings for a while, then fetches them again', async () => {
+    const callWS = vi.fn().mockResolvedValue(prefs);
+    const hass = hassWith([], { callWS } as unknown as Partial<HomeAssistant>);
+    const t = Date.now();
+    await energySources(hass, t);
+    await energySources(hass, t + PREFS_TTL_MS - 1);
+    expect(callWS).toHaveBeenCalledTimes(1);
+    await energySources(hass, t + PREFS_TTL_MS);
+    expect(callWS).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -2,6 +2,7 @@ import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkSummary, type Issue } from '../editor/validate';
 import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { defaultIconFor, stateText } from '../ha/domain';
 import { formatSensor } from '../ha/format';
@@ -179,8 +180,9 @@ export class M3eBadgesCard extends M3eBaseCard<BadgesCardConfig> {
             name: field.text('名前'),
             icon: field.icon(),
             color: field.accent(),
-            text: field.text('文言（{n}・{rest}・{total} が使える）'),
+            text: field.text('文言（{n}・{rest}・{unknown}・{total} が使える）'),
             zero_text: field.text('0件のときの文言'),
+            unknown_text: field.text('状態がわからないときに足す文言（既定：{unknown}件不明）'),
             decimals: field.number('小数点以下の桁数（average）', { min: 0, max: 3 }),
           },
           'name',
@@ -191,6 +193,12 @@ export class M3eBadgesCard extends M3eBaseCard<BadgesCardConfig> {
       ],
       toForm: (c: Record<string, unknown>) => idsToObjects(c, 'badges'),
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return ((c.badges as unknown[] | undefined) ?? []).flatMap((b, i) =>
+      b && typeof b === 'object' && (b as { type?: unknown }).type ? checkSummary(c, `badges.${i}`, `バッジ ${i + 1}`) : [],
+    );
   }
 
   protected normalizeConfig(config: BadgesCardConfig): BadgesCardConfig {

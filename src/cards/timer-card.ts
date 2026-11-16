@@ -1,5 +1,6 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { M3eBaseCard, TAP_ACTION_FIELD, actionsSection, type BaseCardConfig } from './base-card';
+import { checkEntity, type Issue } from '../editor/validate';
 import { richCardStyles } from './shared-styles';
 import { fireHaptic, isUnavailable } from '../ha/helpers';
 import { formatDuration, hms, parseDuration, presetLabel } from '../ha/duration';
@@ -103,9 +104,12 @@ export class M3eTimerCard extends M3eBaseCard<TimerCardConfig> {
     };
   }
 
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkEntity(c, 'entity', ['timer'], 'タイマー', true);
+  }
+
   protected normalizeConfig(config: TimerCardConfig): TimerCardConfig {
     if (!config.entity) throw new Error('entity is required');
-    if (!config.entity.startsWith('timer.')) throw new Error('entity must be a timer');
     for (const p of config.presets ?? []) {
       if (parseDuration(p) === undefined) throw new Error(`presets: "${p}" is not a duration like 3:00`);
     }

@@ -7,6 +7,7 @@ import { ensureFonts, fireAction, fireHaptic, fireMoreInfo, toggleEntity } from 
 import '../editor/card-editor';
 import '../components/m3e-icon';
 import type { ConfigForm } from '../editor/card-editor';
+import { checkOneOf, throwFirstError, type ConfigValidator, type Issue } from '../editor/validate';
 import type { ActionConfig, ActionType, HassEntity, HomeAssistant, LovelaceCardConfig, LovelaceGridOptions } from '../ha/types';
 
 /**
@@ -58,6 +59,27 @@ export const TAP_ACTION_FIELD = [ACTION_FIELDS[0]];
 /** A collapsible "操作" section for a form, holding the given action fields. */
 export function actionsSection(fields: { name: string }[] = ACTION_FIELDS) {
   return { name: 'interactions', type: 'expandable', flatten: true, title: '操作', icon: 'mdi:gesture-tap', schema: fields };
+}
+
+/** Checks every card shares: density, color, theme and the actions. */
+export function baseIssues(config: Record<string, unknown>): Issue[] {
+  const out = [
+    ...checkOneOf(config, 'density', ['auto', 'compact', 'comfortable'], '密度'),
+    ...checkOneOf(config, 'color', ACCENTS, 'アクセントカラー'),
+    ...checkOneOf(config, 'theme', ['auto', 'latte', 'mocha'], 'テーマ'),
+  ];
+  for (const key of ['tap_action', 'hold_action', 'double_tap_action'] as const) {
+    const a = config[key];
+    if (a !== undefined && (typeof a !== 'object' || !a || typeof (a as ActionConfig).action !== 'string')) {
+      out.push({ path: key, level: 'error', message: `${key} must look like { action: more-info }`, hint: `${ACTION_LABELS[key]}の動作は { action: more-info } の形で書いてください` });
+    }
+  }
+  return out;
+}
+
+/** The base checks, then the card class's own `validateConfig`. */
+export function validateCard(cls: { validateConfig?: ConfigValidator }, config: Record<string, unknown>): Issue[] {
+  return [...baseIssues(config), ...(cls.validateConfig?.(config) ?? [])];
 }
 
 /** Labels for the action fields, shared by every card's computeLabel. */
@@ -187,9 +209,10 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
    * Catppuccin swatch picker for `color` with a Latte / Mocha preview.
    */
   static getConfigElement(): HTMLElement {
-    const cls = this as unknown as { accentPicker: boolean; accentHint?: string; getConfigForm?: () => ConfigForm };
+    const cls = this as unknown as { accentPicker: boolean; accentHint?: string; getConfigForm?: () => ConfigForm; validateConfig?: ConfigValidator };
     const el = document.createElement('m3e-card-editor');
     el.form = cls.getConfigForm?.() ?? { schema: [] };
+    el.validate = (config) => validateCard(cls, config);
     el.picker = cls.accentPicker;
     el.hint = cls.accentHint;
     return el;
@@ -220,20 +243,15 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     return this.isConnected && (typeof document === 'undefined' || document.visibilityState !== 'hidden');
   }
 
+  /**
+   * Card-specific config checks (see src/editor/validate.ts). Errors make
+   * setConfig throw; the editor lists errors and warnings while editing.
+   */
+  static validateConfig?: ConfigValidator;
+
   setConfig(config: C): void {
-    if (!config) throw new Error('Invalid configuration');
-    if (config.density && !['auto', 'compact', 'comfortable'].includes(config.density)) {
-      throw new Error('density must be one of: auto, compact, comfortable');
-    }
-    if (config.color && !ACCENTS.includes(config.color)) {
-      throw new Error(`color must be one of: ${ACCENTS.join(', ')}`);
-    }
-    for (const key of ['tap_action', 'hold_action', 'double_tap_action'] as const) {
-      const a = config[key] as unknown;
-      if (a !== undefined && (typeof a !== 'object' || !a || typeof (a as ActionConfig).action !== 'string')) {
-        throw new Error(`${key} must look like { action: more-info }`);
-      }
-    }
+    if (!config || typeof config !== 'object') throw new Error('Invalid configuration');
+    throwFirstError(validateCard(this.constructor as { validateConfig?: ConfigValidator }, config as Record<string, unknown>));
     this.config = this.normalizeConfig({ ...config });
     this.syncDensity();
     if (this.isConnected) this.syncClock();
@@ -355,8 +373,18 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     return entityId ? this.hass?.states[entityId] : undefined;
   }
 
-  protected call(domain: string, service: string, data: Record<string, unknown> = {}, entityId?: string): void {
-    this.hass?.callService(domain, service, data, entityId ? { entity_id: entityId } : undefined);
+  /**
+   * Call a service. The returned promise settles with the call, so a card can
+   * show progress and undo an optimistic change when it fails. A failure is
+   * logged here, so callers that don't wait for the result can ignore it.
+   * (HA's frontend also shows its own toast for a failed call.)
+   */
+  protected call(domain: string, service: string, data: Record<string, unknown> = {}, entityId?: string): Promise<unknown> {
+    const p = this.hass
+      ? Promise.resolve().then(() => this.hass!.callService(domain, service, data, entityId ? { entity_id: entityId } : undefined))
+      : Promise.reject(new Error('Home Assistant is not connected'));
+    p.catch((e) => console.warn(`${this.localName}: ${domain}.${service} failed`, e));
+    return p;
   }
 
   /**

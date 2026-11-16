@@ -1,6 +1,7 @@
 import { css, html, nothing, svg, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { checkEntity, checkOneOf, type Issue } from '../editor/validate';
 import { hhmm, isUnavailable, numState, relativeTime } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -486,10 +487,15 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     };
   }
 
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...checkEntity(c, 'entity', ['lock'], '鍵', true),
+      ...checkOneOf(c, 'layout', ['full', 'compact'], 'レイアウト'),
+    ];
+  }
+
   protected normalizeConfig(config: LockCardConfig): LockCardConfig {
     if (!config.entity) throw new Error('entity is required');
-    if (!config.entity.startsWith('lock.')) throw new Error('entity must be a lock');
-    if (config.layout && !['full', 'compact'].includes(config.layout)) throw new Error('layout must be full or compact');
     return config;
   }
 

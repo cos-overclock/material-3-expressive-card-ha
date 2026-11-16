@@ -1,14 +1,17 @@
 import { css, html, nothing, svg, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkOneOf, type Issue } from '../editor/validate';
 import { numState } from '../ha/helpers';
-import { addSeries, energySources, flows, kwh, mergeSources, range, statChanges, sum, type Flows } from '../ha/energy';
+import { addSeries, flows, kwh, loadSources, range, statChanges, sum, type Flows } from '../ha/energy';
+import { FetchTracker } from '../ha/fetch-state';
 import type { LovelaceGridOptions } from '../ha/types';
 import { prefersReducedMotion } from '../motion/spring';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
 import '../components/m3e-rolling-text';
+import '../components/m3e-fetch-status';
 
 export interface EnergyFlowCardConfig extends BaseCardConfig {
   title?: string;
@@ -58,7 +61,10 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
   @state() private k = 1;
   private ro?: ResizeObserver;
   private loadedAt = 0;
-  private loading = false;
+  private readonly fetch = new FetchTracker<{ f: Flows; present: { solar: boolean; grid: boolean; battery: boolean } }>(this, {
+    label: 'm3e-energy-flow-card',
+    isEmpty: ({ f }) => f.home === 0 && f.solar === 0 && f.gridOut === 0,
+  });
 
   static override styles = [
     M3eBaseCard.styles,
@@ -293,6 +299,10 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
     };
   }
 
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkOneOf(c, 'period', ['day', 'week', 'month'], '期間');
+  }
+
   protected normalizeConfig(config: EnergyFlowCardConfig): EnergyFlowCardConfig {
     return config;
   }
@@ -331,32 +341,49 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
-    if (this.hass && Date.now() - this.loadedAt > REFRESH_MS) this.load();
+    if (!this.hass) return;
+    // Another period or other sources: fetch now, not at the next REFRESH_MS.
+    if (this.fetchKey() !== this.fetch.key || Date.now() - this.loadedAt > REFRESH_MS) this.load();
   }
 
-  private async load(): Promise<void> {
-    if (this.loading || !this.hass) return;
-    this.loading = true;
+  /** What the totals depend on in the config. */
+  private fetchKey(): string {
+    return JSON.stringify([this.config.period ?? 'day', this.config.sources]);
+  }
+
+  private readonly retry = () => this.load(true);
+
+  private async load(force = false): Promise<void> {
+    const key = this.fetchKey();
+    if (!this.hass || (!force && this.fetch.isLoading(key))) return;
+    if (this.fetch.shownKey !== key) this.f = undefined;
     this.loadedAt = Date.now();
-    try {
-      const src = mergeSources(await energySources(this.hass), { ...this.config.sources });
-      const { start, end, period, buckets } = range(this.config.period ?? 'day');
-      const ids = [...new Set([...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out])];
-      const data = await statChanges(this.hass, ids, start, end, period, buckets);
-      const total = (list: string[]) => sum(addSeries(data, list, buckets));
-      this.present = { solar: src.solar.length > 0, grid: src.grid_in.length + src.grid_out.length > 0, battery: src.battery_in.length + src.battery_out.length > 0 };
-      this.f = flows({
-        solar: total(src.solar),
-        gridIn: total(src.grid_in),
-        gridOut: total(src.grid_out),
-        batteryIn: total(src.battery_in),
-        batteryOut: total(src.battery_out),
-      });
-    } catch (e) {
-      console.warn('m3e-energy-flow-card: statistics unavailable', e);
-    } finally {
-      this.loading = false;
-    }
+    const hass = this.hass;
+    const config = this.config;
+    await this.fetch.run(
+      key,
+      async () => {
+        const src = await loadSources(hass, { ...config.sources });
+        const { start, end, period, buckets } = range(config.period ?? 'day');
+        const ids = [...new Set([...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out])];
+        const data = await statChanges(hass, ids, start, end, period, buckets);
+        const total = (list: string[]) => sum(addSeries(data, list, buckets));
+        return {
+          present: { solar: src.solar.length > 0, grid: src.grid_in.length + src.grid_out.length > 0, battery: src.battery_in.length + src.battery_out.length > 0 },
+          f: flows({
+            solar: total(src.solar),
+            gridIn: total(src.grid_in),
+            gridOut: total(src.grid_out),
+            batteryIn: total(src.battery_in),
+            batteryOut: total(src.battery_out),
+          }),
+        };
+      },
+      ({ f, present }) => {
+        this.present = present;
+        this.f = f;
+      },
+    );
   }
 
   /** A total inside a node: the number, then a smaller unit so it fits the shape. */
@@ -423,7 +450,18 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
           </div>`
         : nothing}
     </div>`;
-    if (!f) return html`<div class="card">${head}<p class="empty">エネルギーの記録を読み込んでいます…</p></div>`;
+    const status = html`<m3e-fetch-status
+      .view=${this.fetch.view}
+      subject="電力量の記録"
+      emptyText="この期間の記録はまだありません"
+      @retry=${this.retry}
+    ></m3e-fetch-status>`;
+    if (!f) {
+      return html`<div class="card">
+        ${head}
+        ${this.fetch.status === 'error' ? status : html`<p class="empty">エネルギーの記録を読み込んでいます…</p>`}
+      </div>`;
+    }
     const p = this.present;
     const max = Math.max(f.gridToHome, f.solarToHome, f.solarToBattery, f.batteryToHome, f.solarToGrid);
     // Below 0.05 kWh the total would read "0.0", so leave the export out altogether.
@@ -471,6 +509,7 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
       ${p.battery
         ? html`<p class="caption" style="text-align:center"><b>蓄電池</b>充電 ${kwh(f.batteryIn)}／放電 ${kwh(f.batteryOut)} kWh</p>`
         : nothing}
+      ${status}
     </div>`;
   }
 }

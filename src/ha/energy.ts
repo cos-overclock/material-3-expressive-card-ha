@@ -30,14 +30,25 @@ interface EnergyPrefs {
   device_consumption: { stat_consumption: string; name?: string; included_in_stat?: string }[];
 }
 
-const prefsCache = new WeakMap<object, Promise<EnergySources | undefined>>();
+/**
+ * How long fetched energy settings are reused. The cards refetch their data every
+ * few minutes, so a change made in HA's energy settings shows up within this time.
+ */
+export const PREFS_TTL_MS = 5 * 60_000;
 
-/** Energy sources and devices from HA's energy settings (cached per connection). */
-export function energySources(hass: HomeAssistant): Promise<EnergySources | undefined> {
+const prefsCache = new WeakMap<object, { at: number; promise: Promise<EnergySources | undefined> }>();
+
+/**
+ * Energy sources and devices from HA's energy settings, cached per connection for
+ * PREFS_TTL_MS. A failed fetch isn't cached, so the next call asks HA again.
+ */
+export function energySources(hass: HomeAssistant, now = Date.now()): Promise<EnergySources | undefined> {
   const key = (hass.connection ?? hass) as object;
-  let p = prefsCache.get(key);
-  if (!p) {
-    p = (async () => {
+  const hit = prefsCache.get(key);
+  if (hit && now - hit.at < PREFS_TTL_MS) return hit.promise;
+  const entry = {
+    at: now,
+    promise: (async (): Promise<EnergySources | undefined> => {
       if (!hass.callWS) return undefined;
       try {
         const prefs = await hass.callWS<EnergyPrefs>({ type: 'energy/get_prefs' });
@@ -64,10 +75,14 @@ export function energySources(hass: HomeAssistant): Promise<EnergySources | unde
         console.warn('material-3-expressive-card: energy preferences unavailable', e);
         return undefined;
       }
-    })();
-    prefsCache.set(key, p);
-  }
-  return p;
+    })(),
+  };
+  prefsCache.set(key, entry);
+  // Forget a failure (once it is still the cached entry) so the next call retries.
+  entry.promise.then((v) => {
+    if (v === undefined && prefsCache.get(key) === entry) prefsCache.delete(key);
+  });
+  return entry.promise;
 }
 
 /** Config overrides on top of the energy settings. */
@@ -85,6 +100,20 @@ export function mergeSources(base: EnergySources | undefined, override: Partial<
       ? (o.devices as (string | EnergyDevice)[]).map((d) => (typeof d === 'string' ? { stat: d } : d))
       : b.devices,
   };
+}
+
+/**
+ * The energy settings with the config's overrides on top. Throws when HA's
+ * settings couldn't be read and the config names no source of its own, so a
+ * card can show "couldn't fetch" instead of an empty chart.
+ */
+export async function loadSources(
+  hass: HomeAssistant,
+  override: Partial<Record<keyof EnergySources, unknown>> | undefined,
+): Promise<EnergySources> {
+  const base = await energySources(hass);
+  if (!base && !Object.values(override ?? {}).some((v) => v !== undefined)) throw new Error('energy settings unavailable');
+  return mergeSources(base, override);
 }
 
 export const allStats = (s: EnergySources) => [

@@ -1,6 +1,7 @@
 import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, TAP_ACTION_FIELD, actionsSection, type BaseCardConfig } from './base-card';
+import { checkEntity, type Issue } from '../editor/validate';
 import { richCardStyles } from './shared-styles';
 import { debounce, domainOf, isUnavailable } from '../ha/helpers';
 import { formatSensor } from '../ha/format';
@@ -144,9 +145,12 @@ export class M3eFanCard extends M3eBaseCard<FanCardConfig> {
     };
   }
 
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkEntity(c, 'entity', ['fan', 'humidifier'], 'エンティティ', true);
+  }
+
   protected normalizeConfig(config: FanCardConfig): FanCardConfig {
     if (!config.entity) throw new Error('entity is required');
-    if (!['fan', 'humidifier'].includes(domainOf(config.entity))) throw new Error('entity must be a fan or a humidifier');
     return config;
   }
 

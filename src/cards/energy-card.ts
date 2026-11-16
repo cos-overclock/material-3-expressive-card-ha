@@ -3,13 +3,15 @@ import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
 import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { isUnavailable, numState } from '../ha/helpers';
-import { addSeries, energySources, mergeSources, range, statChanges, sum, type EnergyDevice, type EnergySources } from '../ha/energy';
-import type { HassEntity, LovelaceGridOptions } from '../ha/types';
+import { addSeries, loadSources, range, statChanges, sum, type EnergyDevice, type EnergySources } from '../ha/energy';
+import { FetchTracker } from '../ha/fetch-state';
+import type { HassEntity, HomeAssistant, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
 import '../components/m3e-rolling-text';
+import '../components/m3e-fetch-status';
 
 export interface EnergyCardConfig extends BaseCardConfig {
   title?: string;
@@ -80,7 +82,10 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
   @state() private hourly?: Hourly;
   @state() private selected: number | null = null;
   private loadedAt = 0;
-  private loading = false;
+  private readonly fetch = new FetchTracker<Hourly>(this, {
+    label: 'm3e-energy-card',
+    isEmpty: (h) => sum(h.consumption) === 0 && sum(h.solar) === 0 && sum(h.battery) === 0,
+  });
   /** idle → growing (zero height) → grown (staggered transition) → settled. */
   @state() private growth: 'idle' | 'growing' | 'grown' | 'settled' = 'idle';
 
@@ -382,57 +387,68 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
-    if (this.config.show_chart !== false && this.hass && Date.now() - this.loadedAt > REFRESH_MS) this.load();
+    if (this.config.show_chart === false || !this.hass) return;
+    // Other sources or devices: fetch now, not at the next REFRESH_MS.
+    const key = this.fetchKey();
+    if (key !== this.fetch.key || Date.now() - this.loadedAt > REFRESH_MS) this.load();
   }
 
-  private async load(): Promise<void> {
-    if (this.loading || !this.hass) return;
-    this.loading = true;
+  /** What the chart depends on in the config. */
+  private fetchKey(): string {
+    return JSON.stringify([this.config.sources, this.config.devices]);
+  }
+
+  private readonly retry = () => this.load(true);
+
+  private async load(force = false): Promise<void> {
+    const key = this.fetchKey();
+    if (!this.hass || (!force && this.fetch.isLoading(key))) return;
+    if (this.fetch.shownKey !== key) this.hourly = undefined;
     this.loadedAt = Date.now();
-    try {
-      const src = mergeSources(await energySources(this.hass), { ...this.config.sources });
-      const { start, end, period, buckets } = range('day');
-      const ySrc = { ...src, devices: [] };
-      const yStart = new Date(start.getTime() - 86400_000);
-      const flowIds = [...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out];
-      const [today, yesterday] = await Promise.all([
-        statChanges(this.hass, [...new Set([...flowIds, ...src.devices.map((d) => d.stat)])], start, end, period, buckets),
-        statChanges(this.hass, flowIds, yStart, start, period, buckets),
-      ]);
-      const consumption = consumptionSeries(today, src, buckets);
-      // Devices to break out: configured, else the three largest today.
-      const configured = this.config.devices?.map((d) => (typeof d === 'string' ? { stat: d } : d));
-      const picked = (configured ?? [...src.devices].sort((a, b) => sum(today[b.stat] ?? []) - sum(today[a.stat] ?? [])).slice(0, 3)) as (EnergyDevice & {
-        color?: Accent;
-      })[];
-      if (configured) {
-        const extra = await statChanges(this.hass, configured.map((d) => d.stat).filter((id) => !today[id]), start, end, period, buckets);
-        Object.assign(today, extra);
-      }
-      const devices = picked.map((d, i) => ({
-        name: d.name ?? (this.hass!.states[d.stat]?.attributes.friendly_name as string) ?? d.stat,
-        color: d.color ?? DEVICE_COLORS[i % DEVICE_COLORS.length],
-        values: today[d.stat] ?? Array(buckets).fill(0),
-      }));
-      const other = consumption.map((v, i) => Math.max(0, v - devices.reduce((a, d) => a + d.values[i], 0)));
-      const hour = new Date().getHours();
-      const todaySoFar = sum(consumption.slice(0, hour + 1));
-      const ySoFar = sum(consumptionSeries(yesterday, ySrc, buckets).slice(0, hour + 1));
-      this.hourly = {
-        devices,
-        other,
-        solar: addSeries(today, src.solar, buckets),
-        battery: addSeries(today, src.battery_out, buckets),
-        consumption,
-        change: ySoFar > 0 ? todaySoFar / ySoFar - 1 : undefined,
-        hasSolar: src.solar.length > 0,
-        hasBattery: src.battery_out.length > 0,
-      };
-    } catch (e) {
-      console.warn('m3e-energy-card: statistics unavailable', e);
-    } finally {
-      this.loading = false;
+    const hass = this.hass;
+    const config = this.config;
+    await this.fetch.run(key, () => this.fetchHourly(hass, config), (h) => (this.hourly = h));
+  }
+
+  private async fetchHourly(hass: HomeAssistant, config: EnergyCardConfig): Promise<Hourly> {
+    const src = await loadSources(hass, { ...config.sources });
+    const { start, end, period, buckets } = range('day');
+    const ySrc = { ...src, devices: [] };
+    const yStart = new Date(start.getTime() - 86400_000);
+    const flowIds = [...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out];
+    const [today, yesterday] = await Promise.all([
+      statChanges(hass, [...new Set([...flowIds, ...src.devices.map((d) => d.stat)])], start, end, period, buckets),
+      statChanges(hass, flowIds, yStart, start, period, buckets),
+    ]);
+    const consumption = consumptionSeries(today, src, buckets);
+    // Devices to break out: configured, else the three largest today.
+    const configured = config.devices?.map((d) => (typeof d === 'string' ? { stat: d } : d));
+    const picked = (configured ?? [...src.devices].sort((a, b) => sum(today[b.stat] ?? []) - sum(today[a.stat] ?? [])).slice(0, 3)) as (EnergyDevice & {
+      color?: Accent;
+    })[];
+    if (configured) {
+      const extra = await statChanges(hass, configured.map((d) => d.stat).filter((id) => !today[id]), start, end, period, buckets);
+      Object.assign(today, extra);
     }
+    const devices = picked.map((d, i) => ({
+      name: d.name ?? (hass.states[d.stat]?.attributes.friendly_name as string) ?? d.stat,
+      color: d.color ?? DEVICE_COLORS[i % DEVICE_COLORS.length],
+      values: today[d.stat] ?? Array(buckets).fill(0),
+    }));
+    const other = consumption.map((v, i) => Math.max(0, v - devices.reduce((a, d) => a + d.values[i], 0)));
+    const hour = new Date().getHours();
+    const todaySoFar = sum(consumption.slice(0, hour + 1));
+    const ySoFar = sum(consumptionSeries(yesterday, ySrc, buckets).slice(0, hour + 1));
+    return {
+      devices,
+      other,
+      solar: addSeries(today, src.solar, buckets),
+      battery: addSeries(today, src.battery_out, buckets),
+      consumption,
+      change: ySoFar > 0 ? todaySoFar / ySoFar - 1 : undefined,
+      hasSolar: src.solar.length > 0,
+      hasBattery: src.battery_out.length > 0,
+    };
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -580,6 +596,14 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
                 : nothing}
             </div>
             ${this.renderChart(h)}`}
+      ${c.show_chart === false
+        ? nothing
+        : html`<m3e-fetch-status
+            .view=${this.fetch.view}
+            subject="電力量の記録"
+            emptyText="今日の記録はまだありません"
+            @retry=${this.retry}
+          ></m3e-fetch-status>`}
     </div>`;
   }
 }

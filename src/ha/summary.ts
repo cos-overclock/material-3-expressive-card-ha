@@ -3,7 +3,7 @@
  * section headings: "3つ点灯中", "2か所が開", "21.8 °C" (average)…
  */
 import { formatSensor } from './format';
-import { entityIdsOfDomain, isActive, numState } from './helpers';
+import { entityIdsOfDomain, isActive, isUnavailable, numState } from './helpers';
 import type { HomeAssistant } from './types';
 
 export interface CountSummary {
@@ -13,10 +13,19 @@ export interface CountSummary {
   domain?: string;
   /** States that count. Default: "active" (on, open, unlocked, playing…). */
   state?: string | string[];
-  /** Text with {n} (matching), {rest} (not matching) and {total}; e.g. "{n}つ点灯中", "在宅 {n}人・外出 {rest}人". */
+  /**
+   * Text with {n} (matching), {rest} (known and not matching), {unknown}
+   * (missing, unavailable or unknown) and {total}; e.g. "{n}つ点灯中", "在宅 {n}人・外出 {rest}人".
+   */
   text?: string;
-  /** Text when nothing matches, e.g. "すべて消灯". */
+  /** Text when nothing matches and every entity reported a state, e.g. "すべて消灯". */
   zero_text?: string;
+  /**
+   * Added when some entities can't be read (missing, unavailable or unknown), so
+   * a lost device never reads as "すべて正常". {unknown} is their count. Default "{unknown}件不明".
+   * Not added when `text` already shows {unknown}.
+   */
+  unknown_text?: string;
 }
 
 export interface AverageSummary {
@@ -62,17 +71,41 @@ export function summaryText(hass: HomeAssistant | undefined, s: Summary): string
     if (unit === '%') return `${v}%`;
     return `${v}${unit ? ` ${unit}` : ''}`;
   }
-  const states = s.state === undefined ? undefined : [s.state].flat();
-  const n = ids.filter((id) => {
+  const c = countStates(hass, ids, s.state);
+  const fill = (t: string) =>
+    t
+      .replaceAll('{n}', String(c.n))
+      .replaceAll('{rest}', String(c.rest))
+      .replaceAll('{unknown}', String(c.unknown))
+      .replaceAll('{total}', String(ids.length));
+  const unknown = c.unknown ? fill(s.unknown_text ?? '{unknown}件不明') : '';
+  if (c.n === 0 && s.zero_text) {
+    // Nothing matches, but only "all clear" when every entity could be read.
+    return unknown || s.zero_text;
+  }
+  const text = s.text ?? '{n}';
+  return unknown && !text.includes('{unknown}') ? `${fill(text)}・${unknown}` : fill(text);
+}
+
+/**
+ * Split entities into matching, known-but-not-matching and unknown (missing,
+ * unavailable or unknown state). An entity whose state is listed in `state`
+ * counts as matching even when that state is "unavailable".
+ */
+export function countStates(
+  hass: HomeAssistant | undefined,
+  ids: string[],
+  state: string | string[] | undefined,
+): { n: number; rest: number; unknown: number } {
+  const states = state === undefined ? undefined : [state].flat();
+  let n = 0;
+  let unknown = 0;
+  for (const id of ids) {
     const st = hass?.states[id];
-    if (!st) return false;
-    return states ? states.includes(st.state) : isActive(st);
-  }).length;
-  if (n === 0 && s.zero_text) return s.zero_text;
-  return (s.text ?? '{n}')
-    .replaceAll('{n}', String(n))
-    .replaceAll('{rest}', String(ids.length - n))
-    .replaceAll('{total}', String(ids.length));
+    if (st && (states ? states.includes(st.state) : isActive(st))) n++;
+    else if (isUnavailable(st)) unknown++;
+  }
+  return { n, rest: ids.length - n - unknown, unknown };
 }
 
 export { formatSensor };

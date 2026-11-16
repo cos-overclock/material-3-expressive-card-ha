@@ -140,17 +140,9 @@ export class M3eSlider extends LitElement {
     }
   `;
 
-  protected override willUpdate(changed: PropertyValues<this>): void {
-    if ((changed.has('value') || changed.has('min') || changed.has('max')) && !this.dragging) {
-      const p = this.fraction(this.value);
-      if (changed.get('value') === undefined && !this.display.animating && this.display.value === 0) this.display.jump(p);
-      else this.display.set(p);
-    }
-  }
-
   override connectedCallback(): void {
     super.connectedCallback();
-    this.tabIndex = this.disabled ? -1 : 0;
+    this.syncDisabled();
     this.setAttribute('role', 'slider');
     this.addEventListener('pointerdown', this.onDown);
     this.addEventListener('keydown', this.onKey);
@@ -161,6 +153,26 @@ export class M3eSlider extends LitElement {
     this.removeEventListener('pointerdown', this.onDown);
     this.removeEventListener('keydown', this.onKey);
     this.display.stop();
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('disabled')) {
+      this.syncDisabled();
+      // Disabled mid-drag: let go without reporting a value.
+      if (this.disabled && this.dragging) this.endDrag();
+    }
+    if ((changed.has('value') || changed.has('min') || changed.has('max')) && !this.dragging) {
+      const p = this.fraction(this.value);
+      if (changed.get('value') === undefined && !this.display.animating && this.display.value === 0) this.display.jump(p);
+      else this.display.set(p);
+    }
+  }
+
+  /** Out of the tab order and announced as disabled while `disabled`. */
+  private syncDisabled(): void {
+    this.tabIndex = this.disabled ? -1 : 0;
+    this.setAttribute('aria-disabled', String(this.disabled));
+    if (this.disabled && this.matches(':focus')) this.blur();
   }
 
   protected override updated(): void {
@@ -214,17 +226,22 @@ export class M3eSlider extends LitElement {
   };
 
   private onUp = (e: PointerEvent): void => {
-    this.releasePointerCapture(e.pointerId);
+    if (this.hasPointerCapture(e.pointerId)) this.releasePointerCapture(e.pointerId);
+    this.endDrag();
+    this.emit('change');
+  };
+
+  private endDrag(): void {
     this.removeEventListener('pointermove', this.onMove);
     this.removeEventListener('pointerup', this.onUp);
     this.removeEventListener('pointercancel', this.onUp);
     this.pressed = false;
     this.dragging = false;
     this.display.spec = SPRINGS.spatialDefault;
-    this.emit('change');
-  };
+  }
 
   private onKey = (e: KeyboardEvent): void => {
+    if (this.disabled) return;
     const big = (this.max - this.min) / 10;
     const delta: Record<string, number> = {
       ArrowRight: this.step,

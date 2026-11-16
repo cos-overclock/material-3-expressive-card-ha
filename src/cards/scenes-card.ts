@@ -2,6 +2,7 @@ import { css, html, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkNumber, type Issue } from '../editor/validate';
 import { field, listOf } from '../editor/form-helpers';
 import { SPRINGS, springTransition } from '../motion/spring';
 import { domainOf } from '../ha/helpers';
@@ -155,6 +156,10 @@ export class M3eScenesCard extends M3eBaseCard<ScenesCardConfig> {
         { name: 'active_hours', selector: { number: { min: 1, max: 48, mode: 'box' } } },
       ],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkNumber(c, 'active_hours', { min: 0, max: 168, label: '実行済みとして色を付ける時間', unit: '時間' });
   }
 
   protected normalizeConfig(config: ScenesCardConfig): ScenesCardConfig {

@@ -27,23 +27,55 @@ const SAMPLES: Record<string, unknown>[] = [
   { type: 'custom:m3e-energy-flow-card', battery_entity: 'sensor.battery_level', color: 'sky' },
   // Coloured by itself: the editor has no swatches.
   { type: 'custom:m3e-climate-card', entity: 'climate.living_ac' },
+  // Misconfigured: the card refuses it like HA would, the editor lists what is wrong.
+  {
+    type: 'custom:m3e-sensor-card',
+    entity: 'sensor.living_temperature',
+    hours: 0,
+    decimals: 1.5,
+    levels: [{ max: 25, label: '快適' }, { label: '暑い' }, { max: 20, label: '寒い' }],
+  },
+  {
+    type: 'custom:m3e-badges-card',
+    badges: [{ type: 'count', domain: 'light.living', text: '{n}つ点灯中' }],
+  },
 ];
+
+/** HA's error card, roughly: the message setConfig threw. */
+function errorCard(e: unknown): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'error-card';
+  el.textContent = `設定エラー: ${e instanceof Error ? e.message : String(e)}`;
+  return el;
+}
 
 const hass = new MockHass();
 const root = document.getElementById('rows')!;
-const cards: (CardEl | { hass?: unknown })[] = [];
+const cards: (HTMLElement & { hass?: unknown })[] = [];
 
 for (const sample of SAMPLES) {
   const tag = String(sample.type).replace('custom:', '');
   const row = document.createElement('div');
   row.className = 'row';
-  const card = document.createElement(tag) as CardEl;
-  card.setConfig(sample);
+  let card: CardEl | HTMLElement = document.createElement(tag) as CardEl;
+  try {
+    (card as CardEl).setConfig(sample);
+  } catch (e) {
+    card = errorCard(e);
+  }
   const editor = (customElements.get(tag) as unknown as CardClass).getConfigElement();
   editor.setConfig(sample);
   editor.addEventListener('config-changed', (e) => {
     const config = (e as CustomEvent<{ config: Record<string, unknown> }>).detail.config;
-    card.setConfig(config);
+    if ('setConfig' in card) {
+      try {
+        card.setConfig(config);
+      } catch (err) {
+        const shown = errorCard(err);
+        card.replaceWith(shown);
+        card = shown;
+      }
+    }
     editor.setConfig(config);
   });
   const panel = document.createElement('div');

@@ -1,5 +1,6 @@
 import { css, html, nothing } from 'lit';
 import { ACTION_LABELS, M3eBaseCard, TAP_ACTION_FIELD, actionsSection, type BaseCardConfig } from './base-card';
+import { checkSummary, type Issue } from '../editor/validate';
 import type { LovelaceGridOptions } from '../ha/types';
 import { formatSensor } from '../ha/format';
 import { summaryEntities, summaryText, type Summary } from '../ha/summary';
@@ -119,6 +120,10 @@ export class M3eHeadingCard extends M3eBaseCard<HeadingCardConfig> {
       computeLabel: (s: { name: string }) =>
         ({ title: 'タイトル', icon: 'アイコン', entities: '右側に出す値', meta: '右側の文言（固定）', navigation_path: 'タップで開くページ', ...ACTION_LABELS })[s.name],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkSummary(c, 'summary', '右側の要約');
   }
 
   protected normalizeConfig(config: HeadingCardConfig): HeadingCardConfig {

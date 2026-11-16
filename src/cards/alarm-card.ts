@@ -1,6 +1,7 @@
 import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, actionsSection, press, PressGesture, type BaseCardConfig } from './base-card';
+import { checkEntity, type Issue } from '../editor/validate';
 import { fireHaptic, hhmm, isUnavailable } from '../ha/helpers';
 import type { LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
@@ -264,9 +265,12 @@ export class M3eAlarmCard extends M3eBaseCard<AlarmCardConfig> {
     };
   }
 
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkEntity(c, 'entity', ['alarm_control_panel'], '警備', true);
+  }
+
   protected normalizeConfig(config: AlarmCardConfig): AlarmCardConfig {
     if (!config.entity) throw new Error('entity is required');
-    if (!config.entity.startsWith('alarm_control_panel.')) throw new Error('entity must be an alarm_control_panel');
     const bad = config.modes?.find((m) => !MODE_ORDER.includes(m));
     if (bad) throw new Error(`modes: ${bad} is not one of ${MODE_ORDER.join(', ')}`);
     return config;
