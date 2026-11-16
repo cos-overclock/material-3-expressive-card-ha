@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>M3E bundle check</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #fafafa; display: grid; grid-template-columns: repeat(2, 184px); gap: 8px; }
+    </style>
+  </head>
+  <body>
+    <!-- Loads the production bundle (run `npm run build` first) the way HA does. -->
+    <script type="module">
+      await import('/dist/m3e-cards.js');
+      const hass = {
+        states: {
+          'light.a': { entity_id: 'light.a', state: 'on', attributes: { friendly_name: '間接照明', brightness: 102 }, last_changed: '', last_updated: '' },
+          'switch.b': { entity_id: 'switch.b', state: 'off', attributes: { friendly_name: 'テレビ' }, last_changed: '', last_updated: '' },
+        },
+        themes: { darkMode: false },
+        callService: async () => {},
+      };
+      for (const entity of Object.keys(hass.states)) {
+        const el = document.createElement('m3e-tile-card');
+        el.setConfig({ type: 'custom:m3e-tile-card', entity });
+        el.style.height = '120px';
+        el.hass = hass;
+        document.body.append(el);
+      }
+      document.title = `ok ${window.customCards.length} cards`;
+    </script>
+  </body>
+</html>

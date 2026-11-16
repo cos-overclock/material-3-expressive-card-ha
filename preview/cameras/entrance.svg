@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c3044"/><stop offset="1" stop-color="#1b1d29"/></linearGradient>
+    <radialGradient id="glow" cx="0.72" cy="0.18" r="0.45"><stop offset="0" stop-color="#e9d6a8" stop-opacity="0.55"/><stop offset="1" stop-color="#e9d6a8" stop-opacity="0"/></radialGradient>
+    <linearGradient id="door" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a4236"/><stop offset="1" stop-color="#3b2b25"/></linearGradient>
+  </defs>
+  <rect width="720" height="400" fill="url(#wall)"/>
+  <rect width="720" height="400" fill="url(#glow)"/>
+  <rect y="336" width="720" height="64" fill="#101118"/>
+  <rect x="288" y="80" width="168" height="256" rx="10" fill="#465068"/>
+  <rect x="300" y="92" width="144" height="244" rx="6" fill="url(#door)"/>
+  <circle cx="418" cy="222" r="6" fill="#d9b48a"/>
+  <rect x="312" y="340" width="120" height="20" rx="4" fill="#262833"/>
+  <rect x="500" y="108" width="24" height="36" rx="6" fill="#ffe2a8"/>
+  <rect x="132" y="250" width="60" height="90" rx="10" fill="#3d4253"/>
+  <circle cx="162" cy="242" r="58" fill="#2f4a3a"/>
+  <rect x="472" y="300" width="68" height="44" rx="4" fill="#6b4c32"/>
+</svg>

@@ -1,0 +1,59 @@
+# Home Assistant theme matching the M3E cards (Catppuccin Latte / Mocha).
+# Copy into <config>/themes/ and add to configuration.yaml:
+#
+#   frontend:
+#     themes: !include_dir_merge_named themes
+#
+# Then pick "M3E Catppuccin" in your profile. The cards themselves follow HA's
+# dark mode automatically; this theme only styles the page around them.
+#
+# Optional: add `m3e-density: compact` (or `comfortable`) under a mode to fix the
+# density of every m3e card. Without it, cards are compact on phones and tablets.
+M3E Catppuccin:
+  modes:
+    light:
+      primary-color: "#1E66F5"
+      accent-color: "#8839EF"
+      primary-background-color: "#FAFAFA"
+      lovelace-background: "#FAFAFA"
+      secondary-background-color: "#EFF1F5"
+      card-background-color: "#E6E9EF"
+      ha-card-background: "#E6E9EF"
+      ha-card-border-radius: "20px"
+      ha-card-border-width: "0px"
+      ha-card-box-shadow: "none"
+      primary-text-color: "#4C4F69"
+      secondary-text-color: "#6C6F85"
+      divider-color: "rgba(76, 79, 105, 0.08)"
+      app-header-background-color: "#EFF1F5"
+      app-header-text-color: "#4C4F69"
+      app-header-selection-bar-color: "#1E66F5"
+      sidebar-background-color: "#FFFFFF"
+      sidebar-text-color: "#4C4F69"
+      sidebar-icon-color: "#7C7F93"
+      sidebar-selected-background-color: "rgba(30, 102, 245, 0.12)"
+      sidebar-selected-icon-color: "#1E66F5"
+      sidebar-selected-text-color: "#1E66F5"
+    dark:
+      primary-color: "#89B4FA"
+      accent-color: "#CBA6F7"
+      primary-background-color: "#11111B"
+      lovelace-background: "#11111B"
+      secondary-background-color: "#181825"
+      card-background-color: "#1E1E2E"
+      ha-card-background: "#1E1E2E"
+      ha-card-border-radius: "20px"
+      ha-card-border-width: "0px"
+      ha-card-box-shadow: "none"
+      primary-text-color: "#CDD6F4"
+      secondary-text-color: "#A6ADC8"
+      divider-color: "rgba(205, 214, 244, 0.08)"
+      app-header-background-color: "#11111B"
+      app-header-text-color: "#CDD6F4"
+      app-header-selection-bar-color: "#89B4FA"
+      sidebar-background-color: "#181825"
+      sidebar-text-color: "#CDD6F4"
+      sidebar-icon-color: "#9399B2"
+      sidebar-selected-background-color: "rgba(137, 180, 250, 0.16)"
+      sidebar-selected-icon-color: "#89B4FA"
+      sidebar-selected-text-color: "#89B4FA"
