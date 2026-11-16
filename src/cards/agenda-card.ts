@@ -69,8 +69,17 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   @state() private items: TodoItem[] = [];
   @state() private adding = false;
   @state() private draft = '';
+  /** Items whose change is on its way to HA. */
+  @state() private pending = new Set<string>();
+  @state() private todoError = '';
   private eventsAt = 0;
+  /** Calendars and days of the latest event fetch, and of the events on screen. */
+  private eventsFor?: string;
+  private eventsShown?: string;
+  private eventsSeq = 0;
   private todoState?: string;
+  private todoSeq = 0;
+  private errorTimer?: ReturnType<typeof setTimeout>;
   private positions = new Map<string, number>();
 
   static override styles = [
@@ -214,6 +223,29 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
         color: var(--m3-on-surface-variant);
         text-decoration: line-through;
       }
+      /* Sent to HA, not confirmed yet. */
+      .item.sending {
+        cursor: progress;
+      }
+      .item.sending .box,
+      .item.sending .label {
+        opacity: 0.6;
+      }
+      .error {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
+        padding: 8px 12px;
+        border-radius: 12px;
+        background: var(--acc-red-container);
+        color: var(--acc-on-red-container);
+        font: 400 13px / 18px var(--m3e-font-plain);
+      }
+      .error m3e-icon {
+        --m3e-icon-size: 18px;
+        flex: none;
+      }
       .add {
         display: flex;
         align-items: center;
@@ -354,13 +386,22 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
     if (!this.hass) return;
-    if (this.cals().length && Date.now() - this.eventsAt > REFRESH_MS) this.loadEvents();
+    // Other calendars or days: fetch now, not at the next REFRESH_MS.
+    const eventsKey = this.eventsKey();
+    if (this.cals().length && (eventsKey !== this.eventsFor || Date.now() - this.eventsAt > REFRESH_MS)) this.loadEvents(eventsKey);
     // A to-do entity's state is its open-item count: refetch when it changes.
-    const t = this.config.todo ? this.stateObj(this.config.todo) : undefined;
-    const key = t ? `${t.state}|${t.last_updated}` : undefined;
-    if (this.config.todo && key !== this.todoState) {
+    const todo = this.config.todo;
+    const t = todo ? this.stateObj(todo) : undefined;
+    const key = todo ? `${todo}|${t?.state}|${t?.last_updated}` : undefined;
+    if (key !== this.todoState) {
+      // Another list: its items must not stay on screen (or be ticked against the new list).
+      if (this.todoState?.split('|')[0] !== todo) {
+        this.items = [];
+        this.pending = new Set();
+        this.todoError = '';
+      }
       this.todoState = key;
-      this.loadTodo();
+      if (todo) this.loadTodo(todo);
     }
     // FLIP: remember where each item is before it moves.
     if ((changed as Map<string, unknown>).has('items')) {
@@ -384,8 +425,16 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
     });
   }
 
-  private async loadEvents(): Promise<void> {
+  /** What the events depend on: the calendars (with their colours and initials) and the days. */
+  private eventsKey(): string {
+    return JSON.stringify([this.cals(), this.config.days ?? 2]);
+  }
+
+  /** Fetch the events for `key`. A response overtaken by a newer fetch is dropped. */
+  private async loadEvents(key: string): Promise<void> {
     if (!this.hass?.callApi) return;
+    const seq = ++this.eventsSeq;
+    this.eventsFor = key;
     this.eventsAt = Date.now();
     const start = dayStart(new Date());
     const end = new Date(start.getTime() + (this.config.days ?? 2) * 86400_000);
@@ -410,38 +459,98 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
           });
         }),
       );
+      if (seq !== this.eventsSeq) return;
       this.events = lists.flat().sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.getTime() - b.start.getTime());
+      this.eventsShown = key;
     } catch (e) {
+      if (seq !== this.eventsSeq) return;
       console.warn('m3e-agenda-card: calendars unavailable', e);
+      // Don't leave the previous calendars' events up as if they were these.
+      if (this.eventsShown !== key) {
+        this.events = [];
+        this.eventsShown = key;
+      }
     }
   }
 
-  private async loadTodo(): Promise<void> {
-    if (!this.hass?.callWS || !this.config.todo) return;
+  /** Fetch the items of `todo`. A response overtaken by a newer fetch is dropped. */
+  private async loadTodo(todo: string): Promise<void> {
+    if (!this.hass?.callWS) return;
+    const seq = ++this.todoSeq;
     try {
-      const res = await this.hass.callWS<{ items: TodoItem[] }>({ type: 'todo/item/list', entity_id: this.config.todo });
-      this.items = res.items;
+      const res = await this.hass.callWS<{ items: TodoItem[] }>({ type: 'todo/item/list', entity_id: todo });
+      if (seq !== this.todoSeq || todo !== this.config.todo) return;
+      // An item still being updated keeps its new status until HA answers.
+      this.items = res.items.map((i) => {
+        const mine = this.pending.has(i.uid) ? this.items.find((x) => x.uid === i.uid) : undefined;
+        return mine ? { ...i, status: mine.status } : i;
+      });
     } catch (e) {
+      if (seq !== this.todoSeq) return;
       console.warn('m3e-agenda-card: to-do list unavailable', e);
     }
   }
 
-  private toggle(item: TodoItem): void {
-    const status = item.status === 'completed' ? 'needs_action' : 'completed';
-    // Optimistic: move it now, HA confirms by changing the list's state.
-    this.items = this.items.map((i) => (i.uid === item.uid ? { ...i, status } : i));
-    this.call('todo', 'update_item', { item: item.uid, status }, this.config.todo);
+  private setPending(uid: string, on: boolean): void {
+    const next = new Set(this.pending);
+    if (on) next.add(uid);
+    else next.delete(uid);
+    this.pending = next;
   }
 
-  private add(): void {
+  /** Show a failure under the list for a while (HA also shows its own toast). */
+  private fail(message: string): void {
+    clearTimeout(this.errorTimer);
+    this.todoError = message;
+    this.errorTimer = setTimeout(() => (this.todoError = ''), 6000);
+  }
+
+  private async toggle(item: TodoItem): Promise<void> {
+    const todo = this.config.todo;
+    if (!todo || this.pending.has(item.uid)) return;
+    const before = item.status;
+    const status = before === 'completed' ? 'needs_action' : 'completed';
+    // Optimistic: move it now and mark it as sending; HA confirms by changing the list's state.
+    this.items = this.items.map((i) => (i.uid === item.uid ? { ...i, status } : i));
+    this.setPending(item.uid, true);
+    try {
+      await this.call('todo', 'update_item', { item: item.uid, status }, todo);
+    } catch {
+      if (todo !== this.config.todo) return;
+      // Put it back where it was.
+      this.items = this.items.map((i) => (i.uid === item.uid && i.status === status ? { ...i, status: before } : i));
+      this.fail(`「${item.summary}」を更新できませんでした`);
+    } finally {
+      this.setPending(item.uid, false);
+    }
+  }
+
+  private async add(): Promise<void> {
     const text = this.draft.trim();
-    if (!text) {
+    const todo = this.config.todo;
+    if (!text || !todo) {
       this.adding = false;
       return;
     }
-    this.items = [{ uid: `pending-${Date.now()}`, summary: text, status: 'needs_action' }, ...this.items];
-    this.call('todo', 'add_item', { item: text }, this.config.todo);
+    // Shown at once, marked as sending; the next fetch of the list replaces it with HA's item.
+    const uid = `pending-${Date.now()}`;
+    this.items = [{ uid, summary: text, status: 'needs_action' }, ...this.items];
+    this.setPending(uid, true);
     this.draft = '';
+    try {
+      await this.call('todo', 'add_item', { item: text }, todo);
+    } catch {
+      if (todo !== this.config.todo) return;
+      // Take it back out, and give the text back to the field unless something new was typed.
+      this.items = this.items.filter((i) => i.uid !== uid);
+      if (!this.draft) {
+        this.draft = text;
+        this.adding = true;
+      }
+      this.fail(`「${text}」を追加できませんでした`);
+    } finally {
+      this.setPending(uid, false);
+    }
   }
 
   private eventLine(e: CalEvent): string {
@@ -492,10 +601,11 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
           [...open, ...done],
           (i) => i.uid,
           (i) => html`<div
-            class="item ${i.status === 'completed' ? 'done' : ''}"
+            class="item ${i.status === 'completed' ? 'done' : ''} ${this.pending.has(i.uid) ? 'sending' : ''}"
             data-uid=${i.uid}
             role="checkbox"
             aria-checked=${i.status === 'completed' ? 'true' : 'false'}
+            aria-busy=${this.pending.has(i.uid) ? 'true' : 'false'}
             tabindex="0"
             @click=${() => this.toggle(i)}
             @keydown=${(e: KeyboardEvent) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), this.toggle(i))}
@@ -505,6 +615,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
           </div>`,
         )}
       </div>
+      ${this.todoError ? html`<p class="error" role="alert"><m3e-icon icon="error"></m3e-icon>${this.todoError}</p>` : nothing}
       ${this.config.hide_add
         ? nothing
         : this.adding
@@ -533,6 +644,12 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
             >
               <m3e-icon icon="add"></m3e-icon>項目を追加
             </button>`}`;
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    clearTimeout(this.errorTimer);
+    this.todoError = '';
   }
 
   protected renderCard() {

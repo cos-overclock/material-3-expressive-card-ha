@@ -71,28 +71,36 @@ export function toggleEntity(hass: HomeAssistant, stateObj: HassEntity): Promise
   }
 }
 
-/** Last scan per domain: [states object it came from, its size, the ids]. */
-const domainCache = new Map<string, { states: object; size: number; ids: string[] }>();
+/**
+ * The last scan of the entity set: the `states` object it was taken from, every
+ * id in it, and the ids per domain worked out so far.
+ */
+let entityScan: { states: object; ids: string[]; byDomain: Map<string, string[]> } | undefined;
 
 /**
  * Every entity id of a domain. HA hands out a new `states` object on each state
- * change, so scanning thousands of ids per card per update adds up: the list is
- * reused while the number of entities stays the same and its ids still exist.
+ * change, so scanning thousands of ids per card per update adds up. The scan is
+ * reused while the entity set is unchanged: the same number of ids, and every id
+ * of the last scan still there (together these mean no id was added either).
+ * One check per `states` object serves every domain and card.
  */
 export function entityIdsOfDomain(hass: HomeAssistant | undefined, domain: string): string[] {
   const states = hass?.states;
   if (!states) return [];
-  const hit = domainCache.get(domain);
-  if (hit?.states === states) return hit.ids;
-  let size = 0;
-  for (const _ in states) size++;
-  if (hit && hit.size === size && hit.ids.every((id) => id in states)) {
-    hit.states = states;
-    return hit.ids;
+  if (entityScan?.states !== states) {
+    let size = 0;
+    for (const _ in states) size++;
+    const prev = entityScan;
+    if (prev && prev.ids.length === size && prev.ids.every((id) => id in states)) prev.states = states;
+    else entityScan = { states, ids: Object.keys(states), byDomain: new Map() };
   }
-  const prefix = `${domain}.`;
-  const ids = Object.keys(states).filter((id) => id.startsWith(prefix));
-  domainCache.set(domain, { states, size, ids });
+  const scan = entityScan!;
+  let ids = scan.byDomain.get(domain);
+  if (!ids) {
+    const prefix = `${domain}.`;
+    ids = scan.ids.filter((id) => id.startsWith(prefix));
+    scan.byDomain.set(domain, ids);
+  }
   return ids;
 }
 

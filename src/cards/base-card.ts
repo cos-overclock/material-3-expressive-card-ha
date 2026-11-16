@@ -355,8 +355,18 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     return entityId ? this.hass?.states[entityId] : undefined;
   }
 
-  protected call(domain: string, service: string, data: Record<string, unknown> = {}, entityId?: string): void {
-    this.hass?.callService(domain, service, data, entityId ? { entity_id: entityId } : undefined);
+  /**
+   * Call a service. The returned promise settles with the call, so a card can
+   * show progress and undo an optimistic change when it fails. A failure is
+   * logged here, so callers that don't wait for the result can ignore it.
+   * (HA's frontend also shows its own toast for a failed call.)
+   */
+  protected call(domain: string, service: string, data: Record<string, unknown> = {}, entityId?: string): Promise<unknown> {
+    const p = this.hass
+      ? Promise.resolve().then(() => this.hass!.callService(domain, service, data, entityId ? { entity_id: entityId } : undefined))
+      : Promise.reject(new Error('Home Assistant is not connected'));
+    p.catch((e) => console.warn(`${this.localName}: ${domain}.${service} failed`, e));
+    return p;
   }
 
   /**

@@ -84,6 +84,10 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   @state() private history: Point[] = [];
   @state() private scrubIndex: number | null = null;
   private fetchedFor?: string;
+  /** Entity and hours the history on screen belongs to. */
+  private historyFor?: string;
+  /** Bumped by every fetch, so a late answer to an earlier one is dropped. */
+  private fetchSeq = 0;
   private refreshTimer?: ReturnType<typeof setInterval>;
   private fetchedAt = 0;
 
@@ -369,12 +373,21 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     if (!this.hass || !this.config) return;
     const key = `${this.config.entity}|${this.config.hours ?? 24}`;
     if (!force && this.fetchedFor === key) return;
+    // Another entity or window: the old history doesn't belong on this chart.
+    if (this.historyFor !== key) {
+      this.history = [];
+      this.historyFor = key;
+    }
     this.fetchedFor = key;
     this.fetchedAt = Date.now();
+    const seq = ++this.fetchSeq;
+    const entity = this.config.entity;
     try {
-      const res = await fetchHistory(this.hass, [this.config.entity], this.config.hours ?? 24);
-      this.history = res[this.config.entity] ?? [];
+      const res = await fetchHistory(this.hass, [entity], this.config.hours ?? 24);
+      if (seq !== this.fetchSeq) return;
+      this.history = res[entity] ?? [];
     } catch (e) {
+      if (seq !== this.fetchSeq) return;
       console.warn('m3e-sensor-card: history unavailable', e);
     }
   }
