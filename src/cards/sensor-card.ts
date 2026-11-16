@@ -1,6 +1,7 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
+import { checkEntity, checkLevels, checkNumber, checkOneOf, type Issue } from '../editor/validate';
 import { levelsField } from '../editor/form-helpers';
 import { fetchHistory, resample, type Point } from '../ha/history';
 import { FetchTracker } from '../ha/fetch-state';
@@ -310,6 +311,16 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
         actionsSection(TAP_ACTION_FIELD),
       ],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...checkEntity(c, 'entity', undefined, 'エンティティ', true),
+      ...checkOneOf(c, 'layout', ['full', 'compact'], 'レイアウト'),
+      ...checkNumber(c, 'hours', { min: 1, max: 8760, label: 'グラフの時間', unit: '時間' }),
+      ...checkNumber(c, 'decimals', { min: 0, max: 6, integer: true, label: '小数点以下の桁数' }),
+      ...checkLevels(c),
+    ];
   }
 
   protected normalizeConfig(config: SensorCardConfig): SensorCardConfig {

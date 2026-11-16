@@ -2,6 +2,7 @@ import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkEntity, checkNumber, type Issue } from '../editor/validate';
 import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { hhmm } from '../ha/helpers';
 import { FetchTracker } from '../ha/fetch-state';
@@ -352,6 +353,17 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
       ],
       toForm: (c: Record<string, unknown>) => idsToObjects(c, 'calendars'),
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...((c.calendars as unknown[] | undefined) ?? []).flatMap((cal, i) =>
+        checkEntity({ calendars: { [i]: typeof cal === 'string' ? cal : (cal as { entity?: unknown } | undefined)?.entity } }, `calendars.${i}`, ['calendar'], `カレンダー ${i + 1}`, true),
+      ),
+      ...checkEntity(c, 'todo', ['todo'], 'To-do リスト'),
+      ...checkNumber(c, 'days', { min: 1, max: 31, integer: true, label: '表示する日数', unit: '日' }),
+      ...checkNumber(c, 'show_completed', { min: 0, max: 50, integer: true, label: 'チェック済みを残す件数' }),
+    ];
   }
 
   protected normalizeConfig(config: AgendaCardConfig): AgendaCardConfig {

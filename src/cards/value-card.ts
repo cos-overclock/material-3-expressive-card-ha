@@ -1,5 +1,6 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { M3eBaseCard, actionsSection, press, PressGesture, type BaseCardConfig } from './base-card';
+import { checkLevels, checkNumber, type Issue } from '../editor/validate';
 import { levelsField } from '../editor/form-helpers';
 import { DEVICE, levelFor, sensorLevels, type SensorLevel } from './sensor-card';
 import { defaultAccentFor, defaultIconFor } from '../ha/domain';
@@ -334,6 +335,18 @@ export class M3eValueCard extends M3eBaseCard<ValueCardConfig> {
         actionsSection(),
       ],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...checkNumber(c, 'decimals', { min: 0, max: 6, integer: true, label: '小数点以下の桁数' }),
+      ...checkNumber(c, 'min', { label: '最小値' }),
+      ...checkNumber(c, 'max', { label: '最大値' }),
+      ...(typeof c.min === 'number' && typeof c.max === 'number' && c.min >= c.max
+        ? [{ path: 'max', level: 'error', message: 'max must be larger than min', hint: `最大値（${c.max}）は最小値（${c.min}）より大きくしてください` } satisfies Issue]
+        : []),
+      ...checkLevels(c),
+    ];
   }
 
   protected normalizeConfig(config: ValueCardConfig): ValueCardConfig {

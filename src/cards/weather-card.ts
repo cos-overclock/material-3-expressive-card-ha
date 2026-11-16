@@ -1,6 +1,7 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, TAP_ACTION_FIELD, actionsSection, type BaseCardConfig } from './base-card';
+import { checkEntity, checkNumber, type Issue } from '../editor/validate';
 import { WEATHER_ICON, WEATHER_LABEL, WEEKDAY } from '../ha/labels';
 import { isUnavailable } from '../ha/helpers';
 import { ForecastSubscriptions, upcoming, type Forecast, type ForecastType } from '../ha/weather';
@@ -216,9 +217,16 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
     };
   }
 
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...checkEntity(c, 'entity', ['weather'], '天気', true),
+      ...checkNumber(c, 'hours', { min: 1, max: 48, integer: true, label: '1時間ごとの予報の数' }),
+      ...checkNumber(c, 'days', { min: 1, max: 14, integer: true, label: '日ごとの予報の日数' }),
+    ];
+  }
+
   protected normalizeConfig(config: WeatherCardConfig): WeatherCardConfig {
     if (!config.entity) throw new Error('entity is required');
-    if (!config.entity.startsWith('weather.')) throw new Error('entity must be a weather entity');
     return config;
   }
 

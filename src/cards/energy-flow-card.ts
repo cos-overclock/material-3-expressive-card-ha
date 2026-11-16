@@ -1,6 +1,7 @@
 import { css, html, nothing, svg, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkOneOf, type Issue } from '../editor/validate';
 import { numState } from '../ha/helpers';
 import { addSeries, flows, kwh, loadSources, range, statChanges, sum, type Flows } from '../ha/energy';
 import { FetchTracker } from '../ha/fetch-state';
@@ -296,6 +297,10 @@ export class M3eEnergyFlowCard extends M3eBaseCard<EnergyFlowCardConfig> {
         { name: 'battery_entity', selector: { entity: { domain: 'sensor', device_class: 'battery' } } },
       ],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return checkOneOf(c, 'period', ['day', 'week', 'month'], '期間');
   }
 
   protected normalizeConfig(config: EnergyFlowCardConfig): EnergyFlowCardConfig {

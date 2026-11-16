@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { ACCENTS, ACCENT_LABELS, themeTokens, type Accent } from '../theme/tokens';
 import { define } from '../components/define';
+import type { ConfigValidator, Issue } from './validate';
 import '../components/m3e-icon';
 import '../components/m3e-shape';
 
@@ -141,6 +142,8 @@ export class M3eCardEditor extends LitElement {
   @property({ attribute: false }) picker = true;
   /** What `color` changes on this card, shown under the swatches. */
   @property({ attribute: false }) hint?: string;
+  /** The card's config checks; their findings are listed above the form. */
+  @property({ attribute: false }) validate?: ConfigValidator;
   @state() private config: Config = {};
   @state() private formReady = !!customElements.get('ha-form');
 
@@ -220,6 +223,39 @@ export class M3eCardEditor extends LitElement {
         margin: 10px 0 0;
         font: 400 12px / 18px var(--mdc-typography-body1-font-family, var(--m3e-font-plain));
         color: var(--secondary-text-color, var(--m3-on-surface-variant));
+      }
+      .issues {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 0 0 16px;
+        padding: 0;
+        list-style: none;
+      }
+      .issue {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 12px;
+        font: 400 13px / 18px var(--mdc-typography-body1-font-family, var(--m3e-font-plain));
+      }
+      .issue m3e-icon {
+        --m3e-icon-size: 18px;
+        flex: none;
+      }
+      .issue.error {
+        background: var(--acc-red-container);
+        color: var(--acc-on-red-container);
+      }
+      .issue.warning {
+        background: var(--acc-yellow-container);
+        color: var(--acc-on-yellow-container);
+      }
+      .issue code {
+        font-family: var(--code-font-family, ui-monospace, monospace);
+        font-size: 12px;
+        opacity: 0.8;
       }
       .preview {
         display: grid;
@@ -326,8 +362,43 @@ export class M3eCardEditor extends LitElement {
     </div>`;
   }
 
+  /** The config's issues, errors first. */
+  private issues(): Issue[] {
+    let list: Issue[];
+    try {
+      list = this.validate?.(this.config) ?? [];
+    } catch {
+      list = [];
+    }
+    return [...list].sort((a, b) => Number(b.level === 'error') - Number(a.level === 'error'));
+  }
+
+  /** Errors under their form field (ha-form shows `error[name]` below that field). */
+  private fieldErrors(issues: Issue[]): Record<string, string> | undefined {
+    const out: Record<string, string> = {};
+    for (const i of issues) {
+      const field = i.path.split('.')[0];
+      if (i.level === 'error' && !out[field]) out[field] = i.hint;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  private renderIssues(issues: Issue[]) {
+    if (!issues.length) return nothing;
+    return html`<ul class="issues" role="alert" aria-label="設定の確認">
+      ${issues.map(
+        (i) => html`<li class="issue ${i.level}">
+          <m3e-icon icon=${i.level === 'error' ? 'error' : 'warning'}></m3e-icon>
+          <span>${i.hint} <code>${i.path}</code></span>
+        </li>`,
+      )}
+    </ul>`;
+  }
+
   protected override render() {
+    const issues = this.issues();
     return html`
+      ${this.renderIssues(issues)}
       ${this.formReady && this.form.schema.length
         ? html`<ha-form
             .hass=${this.hass}
@@ -335,6 +406,8 @@ export class M3eCardEditor extends LitElement {
             .schema=${this.form.schema}
             .computeLabel=${this.computeLabel}
             .computeHelper=${this.computeHelper}
+            .error=${this.fieldErrors(issues)}
+            .computeError=${(e: string) => e}
             @value-changed=${this.onFormChanged}
           ></ha-form>`
         : nothing}

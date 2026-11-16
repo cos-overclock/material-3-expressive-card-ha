@@ -1,6 +1,7 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
+import { checkEntity, checkNumber, checkTime, isDate, type Issue } from '../editor/validate';
 import { field, listOf } from '../editor/form-helpers';
 import { isActive } from '../ha/helpers';
 import { DAYS, ruleHits, ymd, type Rule } from '../ha/garbage-rules';
@@ -275,6 +276,32 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
         { name: 'note', selector: { text: {} } },
       ],
     };
+  }
+
+  static override validateConfig(c: Record<string, unknown>): Issue[] {
+    return [
+      ...checkEntity(c, 'calendar', ['calendar'], 'カレンダー'),
+      ...checkTime(c, 'deadline', '締め切り時刻'),
+      ...checkNumber(c, 'upcoming', { min: 0, max: 20, integer: true, label: 'その先の予定の件数' }),
+      ...((c.schedule as Record<string, unknown>[] | undefined) ?? []).flatMap((r, i): Issue[] => [
+        ...((r?.weeks as unknown[] | undefined) ?? [])
+          .filter((w) => !(Number.isInteger(Number(w)) && Number(w) >= 1 && Number(w) <= 5))
+          .map((w) => ({
+            path: `schedule.${i}.weeks`,
+            level: 'error' as const,
+            message: `schedule.${i}.weeks: ${w} must be 1 to 5`,
+            hint: `収集日 ${i + 1} の「第何週」は 1〜5 にしてください（いまは ${JSON.stringify(w)}）`,
+          })),
+        ...((r?.dates as unknown[] | undefined) ?? [])
+          .filter((d) => !isDate(d))
+          .map((d) => ({
+            path: `schedule.${i}.dates`,
+            level: 'error' as const,
+            message: `schedule.${i}.dates: ${d} must be a date like 2026-12-31`,
+            hint: `収集日 ${i + 1} の日付は 2026-12-31 のように書いてください（いまは ${JSON.stringify(d)}）`,
+          })),
+      ]),
+    ];
   }
 
   protected normalizeConfig(config: GarbageCardConfig): GarbageCardConfig {
