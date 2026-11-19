@@ -1,6 +1,6 @@
 {
   "name": "material-3-expressive-card",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Material 3 Expressive card library for Home Assistant (Catppuccin Latte / Mocha)",
   "type": "module",
   "private": true,
