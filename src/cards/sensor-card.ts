@@ -3,7 +3,7 @@ import { state } from 'lit/decorators.js';
 import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { checkEntity, checkLevels, checkNumber, checkOneOf, type Issue } from '../editor/validate';
 import { levelsField } from '../editor/form-helpers';
-import { fetchHistory, resample, type Point } from '../ha/history';
+import { fetchSensorHistory, resample, type Point, type SensorHistoryResult } from '../ha/history';
 import { FetchTracker } from '../ha/fetch-state';
 import { hhmm, isUnavailable, numState } from '../ha/helpers';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
@@ -144,8 +144,13 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   @state() private picked?: number;
   /** Entity and hours of the latest fetch; cleared on disconnect so coming back refetches. */
   private fetchedFor?: string;
+  /** True recorded min/max from long-term statistics when available. */
+  private statExtrema?: { min?: number; max?: number };
   /** Drops late answers, and tells "no history" apart from "couldn't fetch it". */
-  private readonly fetch = new FetchTracker<Point[]>(this, { label: 'm3e-sensor-card' });
+  private readonly fetch = new FetchTracker<SensorHistoryResult>(this, {
+    isEmpty: (r) => r.points.length === 0,
+    label: 'm3e-sensor-card',
+  });
   private refreshTimer?: ReturnType<typeof setInterval>;
   private fetchedAt = 0;
 
@@ -481,7 +486,10 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const key = `${this.config.entity}|${this.hours()}`;
     if (!force && this.fetchedFor === key) return;
     // Another entity or window: the old history doesn't belong on this chart.
-    if (this.fetch.shownKey !== key) this.history = [];
+    if (this.fetch.shownKey !== key) {
+      this.history = [];
+      this.statExtrema = undefined;
+    }
     this.fetchedFor = key;
     this.fetchedAt = Date.now();
     const hass = this.hass;
@@ -489,8 +497,11 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const hours = this.hours();
     await this.fetch.run(
       key,
-      async () => (await fetchHistory(hass, [entity], hours))[entity] ?? [],
-      (points) => (this.history = points),
+      () => fetchSensorHistory(hass, entity, hours),
+      (res) => {
+        this.history = res.points;
+        this.statExtrema = res.min !== undefined || res.max !== undefined ? { min: res.min, max: res.max } : undefined;
+      },
     );
   }
 
@@ -566,7 +577,9 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const name = this.config.name ?? (s?.attributes.friendly_name as string) ?? this.config.entity;
     const nums = values.filter((v): v is number => v !== null);
     const inWindow = this.history.filter(([t]) => t >= start && t <= end).map(([, v]) => v);
-    const extrema = inWindow.length ? [...nums, ...inWindow] : nums;
+    const extrema = inWindow.length ? [...nums, ...inWindow] : [...nums];
+    if (typeof this.statExtrema?.min === 'number' && Number.isFinite(this.statExtrema.min)) extrema.push(this.statExtrema.min);
+    if (typeof this.statExtrema?.max === 'number' && Number.isFinite(this.statExtrema.max)) extrema.push(this.statExtrema.max);
     const scrubbing = this.scrubIndex !== null && values[this.scrubIndex] != null;
     const shown = scrubbing ? values[this.scrubIndex!] : numState(s);
     const at = scrubbing ? start + ((this.scrubIndex! + 0.5) / values.length) * (end - start) : 0;

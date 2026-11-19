@@ -4,6 +4,8 @@ import { Directive, directive, type ElementPart } from 'lit/directive.js';
 import { motionTokens } from '../motion/motion-css';
 import { ACCENTS, themeTokens, type Accent } from '../theme/tokens';
 import { ensureFonts, fireAction, fireHaptic, fireMoreInfo, toggleEntity } from '../ha/helpers';
+import { installFocusAnchor } from '../ha/focus-anchor';
+import { VisibleTicker } from '../ha/visible-ticker';
 import '../editor/card-editor';
 import '../components/m3e-icon';
 import type { ConfigForm } from '../editor/card-editor';
@@ -111,10 +113,12 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
   @state() protected compact = false;
   /** Bumped every clockInterval() ms while the page is visible, re-rendering the card. */
   @state() protected clockNow = Date.now();
-  private ownClockTimer?: ReturnType<typeof setInterval>;
-  private lastVisible = true;
   private readonly onMedia = () => this.syncDensity();
-  private readonly onVisibility = () => this.syncClock();
+  private readonly ticker = new VisibleTicker(this, {
+    onTick: (now) => (this.clockNow = now),
+    onVisibility: (visible) => this.visibilityChanged(visible),
+    initialVisible: true,
+  });
 
   static baseStyles = css`
     :host {
@@ -126,6 +130,9 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
       word-break: auto-phrase;
       line-break: strict;
       text-wrap: pretty;
+    }
+    :host(:focus) {
+      outline: none;
     }
     * {
       box-sizing: border-box;
@@ -243,9 +250,9 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
   /** Called when the page is hidden or shown again (pause polling, video…). */
   protected visibilityChanged(_visible: boolean): void {}
 
-  /** True while the tab is in the foreground and the card is on the page. */
+  /** True while the card is connected, in the viewport, and the tab is in the foreground. */
   protected get pageVisible(): boolean {
-    return this.isConnected && (typeof document === 'undefined' || document.visibilityState !== 'hidden');
+    return this.ticker.visible;
   }
 
   /**
@@ -282,21 +289,9 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     this.syncClock();
   }
 
-  /** (Re)start the clock for the current config and page visibility; report visibility changes. */
+  /** (Re)start the clock for the current config and visibility. */
   private syncClock(): void {
-    clearInterval(this.ownClockTimer);
-    this.ownClockTimer = undefined;
-    const visible = this.pageVisible;
-    const ms = visible && this.config ? this.clockInterval() : 0;
-    if (ms > 0) {
-      // Coming back to the page catches up at once.
-      this.clockNow = Date.now();
-      this.ownClockTimer = setInterval(() => (this.clockNow = Date.now()), ms);
-    }
-    if (visible !== this.lastVisible) {
-      this.lastVisible = visible;
-      this.visibilityChanged(visible);
-    }
+    this.ticker.setPeriod(this.config ? this.clockInterval() : 0);
   }
 
   getCardSize(): number {
@@ -310,17 +305,16 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
   override connectedCallback(): void {
     super.connectedCallback();
     ensureFonts();
+    installFocusAnchor();
     compactMedia?.addEventListener('change', this.onMedia);
-    document.addEventListener('visibilitychange', this.onVisibility);
     this.syncDensity();
-    this.syncClock();
+    this.ticker.connect(this.config ? this.clockInterval() : 0);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     compactMedia?.removeEventListener('change', this.onMedia);
-    document.removeEventListener('visibilitychange', this.onVisibility);
-    this.syncClock();
+    this.ticker.disconnect();
   }
 
   protected override shouldUpdate(changed: PropertyValues<this>): boolean {

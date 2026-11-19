@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing, svg, type PropertyValues } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { SPRINGS, springTransition, prefersReducedMotion } from '../motion/spring';
 import { define } from './define';
+import { attachSwipeShield, capturePointer, releasePointer, SliderIntent } from './gesture';
 
 const W = 1000;
 const H = 100;
@@ -72,6 +73,8 @@ export class M3eLineChart extends LitElement {
   private revealed = false;
   private scrubbing = false;
   private scrubPointerId?: number;
+  private readonly intent = new SliderIntent();
+  private detachShield?: () => void;
 
   static override styles = css`
     :host {
@@ -146,8 +149,16 @@ export class M3eLineChart extends LitElement {
     }
   `;
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.detachShield = attachSwipeShield(this, () => this.scrub);
+  }
+
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.detachShield?.();
+    this.detachShield = undefined;
+    this.intent.reset();
     this.scrubbing = false;
     this.scrubPointerId = undefined;
     this.hover = null;
@@ -225,27 +236,35 @@ export class M3eLineChart extends LitElement {
 
   private onDown = (e: PointerEvent) => {
     if (!this.scrub || e.button !== 0) return;
-    this.scrubbing = true;
     this.scrubPointerId = e.pointerId;
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {
-      /* synthetic events may not have an active pointer */
+    if (this.intent.down(e)) {
+      this.scrubbing = true;
+      capturePointer(e.currentTarget as Element, e.pointerId);
+      this.setHover(this.indexAt(e));
     }
-    this.setHover(this.indexAt(e));
   };
 
   private onMove = (e: PointerEvent) => {
     if (!this.scrub) return;
-    if (this.scrubbing && this.scrubPointerId !== undefined && e.pointerId !== this.scrubPointerId) return;
-    if (e.pointerType && e.pointerType !== 'mouse' && !this.scrubbing) return;
-    this.setHover(this.indexAt(e));
+    if ((!e.pointerType || e.pointerType === 'mouse') && !this.scrubbing) {
+      this.setHover(this.indexAt(e));
+      return;
+    }
+    if (this.scrubPointerId !== undefined && e.pointerId !== this.scrubPointerId) return;
+    const res = this.intent.move(e);
+    if (res === 'start') {
+      this.scrubbing = true;
+      capturePointer(e.currentTarget as Element, e.pointerId);
+      this.setHover(this.indexAt(e));
+    } else if (res === 'drag') {
+      this.setHover(this.indexAt(e));
+    }
   };
 
   private onUp = (e: PointerEvent) => {
     if (this.scrubPointerId !== undefined && e.pointerId !== this.scrubPointerId) return;
-    const el = e.currentTarget as HTMLElement;
-    if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    releasePointer(e.currentTarget as Element, e.pointerId);
+    this.intent.up(e);
     this.scrubbing = false;
     this.scrubPointerId = undefined;
     if (this.scrub && e.pointerType !== 'mouse') this.setHover(null);
@@ -253,6 +272,13 @@ export class M3eLineChart extends LitElement {
 
   private onLeave = (e: PointerEvent) => {
     if (this.scrubbing && e.type === 'pointerleave') return;
+    if (this.scrubPointerId !== undefined && e.pointerId !== this.scrubPointerId) return;
+    if (e.type === 'pointercancel') {
+      releasePointer(e.currentTarget as Element, e.pointerId);
+      this.intent.cancel(e);
+    } else {
+      this.intent.reset();
+    }
     this.scrubbing = false;
     this.scrubPointerId = undefined;
     if (this.scrub) this.setHover(null);

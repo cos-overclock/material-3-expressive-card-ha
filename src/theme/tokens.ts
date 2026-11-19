@@ -57,7 +57,7 @@ export const ACCENT_OPTIONS = ACCENTS.map((value) => ({ value, label: ACCENT_LAB
  */
 type Roles = [fill: string, onFill: string, container: string, onContainer: string, shape: string, onShape: string, track: string];
 
-const LATTE_ACCENTS: Record<Accent, Roles> = {
+export const LATTE_ACCENTS: Record<Accent, Roles> = {
   rosewater: ['#CF7E6D', '#FFFFFF', '#EAD8D7', '#83524C', '#CF7E6D', '#FFFFFF', '#E7C7C2'],
   flamingo: ['#DB7676', '#FFFFFF', '#EBD4D7', '#8A4E52', '#DB7676', '#FFFFFF', '#E8BFC2'],
   maroon: ['#E64553', '#FFFFFF', '#EDC8CE', '#91303D', '#E64553', '#FFFFFF', '#EBAAB3'],
@@ -74,7 +74,7 @@ const LATTE_ACCENTS: Record<Accent, Roles> = {
   pink: ['#D471BD', '#FFFFFF', '#EED3EB', '#86487A', '#D471BD', '#FFFFFF', '#E8BDE1'],
 };
 
-const MOCHA_ACCENTS: Record<Accent, Roles> = {
+export const MOCHA_ACCENTS: Record<Accent, Roles> = {
   rosewater: ['#F5E0DC', '#11111B', '#F5E0DC', '#11111B', '#35323A', '#F5E0DC', '#C3B2B2'],
   flamingo: ['#F2CDCD', '#11111B', '#F2CDCD', '#11111B', '#352F37', '#F2CDCD', '#C1A4A6'],
   maroon: ['#EBA0AC', '#11111B', '#EBA0AC', '#11111B', '#342832', '#EBA0AC', '#BB818C'],
@@ -105,34 +105,62 @@ function accentVars(table: Record<Accent, Roles>): string {
   ).join('\n');
 }
 
+export const LATTE_SURFACES = {
+  bg: '#FAFAFA',
+  surfaceContainer: '#E6E9EF',
+  surfaceHigh: '#DCE0E8',
+  surfaceHighest: '#CCD0DA',
+  surfaceBright: '#EFF1F5',
+  onSurface: '#4C4F69',
+  onSurfaceVariant: '#6C6F85',
+  outline: '#9CA0B0',
+  outlineVariant: '#BCC0CC',
+  inverseSurface: '#4C4F69',
+  inverseOnSurface: '#EFF1F5',
+} as const;
+
+export const MOCHA_SURFACES = {
+  bg: '#11111B',
+  surfaceContainer: '#1E1E2E',
+  surfaceHigh: '#313244',
+  surfaceHighest: '#45475A',
+  surfaceBright: '#585B70',
+  onSurface: '#CDD6F4',
+  onSurfaceVariant: '#A6ADC8',
+  outline: '#6C7086',
+  outlineVariant: '#45475A',
+  inverseSurface: '#CDD6F4',
+  inverseOnSurface: '#1E1E2E',
+} as const;
+
 const LATTE = `
-  --m3e-bg: #FAFAFA;
-  --m3-surface-container: #E6E9EF;
-  --m3-surface-high: #DCE0E8;
-  --m3-surface-highest: #CCD0DA;
-  --m3-surface-bright: #EFF1F5;
-  --m3-on-surface: #4C4F69;
-  --m3-on-surface-variant: #6C6F85;
-  --m3-outline: #9CA0B0;
-  --m3-outline-variant: #BCC0CC;
-  --m3-inverse-surface: #4C4F69;
-  --m3-inverse-on-surface: #EFF1F5;
+  --m3e-bg: ${LATTE_SURFACES.bg};
+  --m3-surface-container: ${LATTE_SURFACES.surfaceContainer};
+  --m3-surface-high: ${LATTE_SURFACES.surfaceHigh};
+  --m3-surface-highest: ${LATTE_SURFACES.surfaceHighest};
+  --m3-surface-bright: ${LATTE_SURFACES.surfaceBright};
+  --m3-on-surface: ${LATTE_SURFACES.onSurface};
+  --m3-on-surface-variant: ${LATTE_SURFACES.onSurfaceVariant};
+  --m3-outline: ${LATTE_SURFACES.outline};
+  --m3-outline-variant: ${LATTE_SURFACES.outlineVariant};
+  --m3-inverse-surface: ${LATTE_SURFACES.inverseSurface};
+  --m3-inverse-on-surface: ${LATTE_SURFACES.inverseOnSurface};
   --m3e-swatch-border: rgba(0, 0, 0, 0.1);
   ${accentVars(LATTE_ACCENTS)}
 `;
 
 const MOCHA = `
-  --m3e-bg: #11111B;
-  --m3-surface-container: #1E1E2E;
-  --m3-surface-high: #313244;
-  --m3-surface-highest: #45475A;
-  --m3-surface-bright: #585B70;
-  --m3-on-surface: #CDD6F4;
-  --m3-on-surface-variant: #A6ADC8;
-  --m3-outline: #6C7086;
-  --m3-outline-variant: #45475A;
-  --m3-inverse-surface: #CDD6F4;
-  --m3-inverse-on-surface: #1E1E2E;
+  --m3e-bg: ${MOCHA_SURFACES.bg};
+  --m3-surface-container: ${MOCHA_SURFACES.surfaceContainer};
+  --m3-surface-high: ${MOCHA_SURFACES.surfaceHigh};
+  --m3-surface-highest: ${MOCHA_SURFACES.surfaceHighest};
+  --m3-surface-bright: ${MOCHA_SURFACES.surfaceBright};
+  --m3-on-surface: ${MOCHA_SURFACES.onSurface};
+  --m3-on-surface-variant: ${MOCHA_SURFACES.onSurfaceVariant};
+  --m3-outline: ${MOCHA_SURFACES.outline};
+  --m3-outline-variant: ${MOCHA_SURFACES.outlineVariant};
+  --m3-inverse-surface: ${MOCHA_SURFACES.inverseSurface};
+  --m3-inverse-on-surface: ${MOCHA_SURFACES.inverseOnSurface};
   --m3e-swatch-border: rgba(255, 255, 255, 0.12);
   ${accentVars(MOCHA_ACCENTS)}
 `;

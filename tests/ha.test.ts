@@ -5,6 +5,7 @@ import { summaryText } from '../src/ha/summary';
 import { energySources, flows, kwh, PREFS_TTL_MS, range } from '../src/ha/energy';
 import { ruleHits } from '../src/ha/garbage-rules';
 import { formatDuration, hms, parseDuration, presetLabel } from '../src/ha/duration';
+import { fetchSensorHistory } from '../src/ha/history';
 import { upcoming } from '../src/ha/weather';
 import { idsToObjects } from '../src/editor/form-helpers';
 import type { HassEntity, HomeAssistant } from '../src/ha/types';
@@ -232,5 +233,75 @@ describe('weather and editor helpers', () => {
     });
     const same = { people: [{ entity: 'person.a' }] };
     expect(idsToObjects(same, 'people')).toBe(same);
+  });
+});
+
+describe('fetchSensorHistory', () => {
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  const sec = (offsetH: number) => Math.floor((now - offsetH * 3600_000) / 1000);
+
+  it('uses raw history up to 48h and long-term statistics beyond 48h (hour then day)', async () => {
+    const callWS = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+      if (msg.type === 'history/history_during_period') {
+        return { 'sensor.t': [{ s: '21.5', lu: sec(2) }] };
+      }
+      if (msg.type === 'recorder/statistics_during_period') {
+        return {
+          'sensor.t': [
+            { start: (now - 72 * 3600_000), mean: 20.0, min: 18.2, max: 24.7 },
+            { start: (now - 36 * 3600_000), mean: 21.0, min: 19.5, max: 22.0 },
+          ],
+        };
+      }
+      throw new Error('unexpected WS');
+    });
+    const hass = hassWith([], { callWS } as unknown as Partial<HomeAssistant>);
+
+    const r48 = await fetchSensorHistory(hass, 'sensor.t', 48, now);
+    expect(r48.source).toBe('history');
+    expect(r48.points.length).toBe(1);
+    expect((callWS.mock.calls[0][0] as { type: string }).type).toBe('history/history_during_period');
+
+    const r168 = await fetchSensorHistory(hass, 'sensor.t', 168, now);
+    expect(r168.source).toBe('statistics');
+    expect(r168.min).toBe(18.2);
+    expect(r168.max).toBe(24.7);
+    expect(callWS.mock.calls[1][0]).toMatchObject({ type: 'recorder/statistics_during_period', period: 'hour' });
+
+    await fetchSensorHistory(hass, 'sensor.t', 721, now);
+    expect(callWS.mock.calls[2][0]).toMatchObject({ type: 'recorder/statistics_during_period', period: 'day' });
+  });
+
+  it('supports state-only meter statistics and falls back to raw history when empty or unsupported', async () => {
+    const callWS = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+      if (msg.type === 'recorder/statistics_during_period') {
+        return { 'sensor.m': [{ start: sec(50), mean: null, state: 123.4 }] };
+      }
+      return {};
+    });
+    const hass = hassWith([], { callWS } as unknown as Partial<HomeAssistant>);
+    const meter = await fetchSensorHistory(hass, 'sensor.m', 168, now);
+    expect(meter.source).toBe('statistics');
+    expect(meter.points[0][1]).toBe(123.4);
+
+    // Statistics throws -> falls back to history.
+    callWS.mockRejectedValueOnce(new Error('unknown statistic')).mockResolvedValueOnce({
+      'sensor.x': [{ s: '42', lu: sec(10) }],
+    });
+    const fallbackErr = await fetchSensorHistory(hass, 'sensor.x', 168, now);
+    expect(fallbackErr.source).toBe('history');
+    expect(fallbackErr.points[0][1]).toBe(42);
+
+    // Statistics empty -> falls back to history.
+    callWS.mockResolvedValueOnce({ 'sensor.x': [] }).mockResolvedValueOnce({
+      'sensor.x': [{ s: '15', lu: sec(10) }],
+    });
+    const fallbackEmpty = await fetchSensorHistory(hass, 'sensor.x', 168, now);
+    expect(fallbackEmpty.source).toBe('history');
+    expect(fallbackEmpty.points[0][1]).toBe(15);
+
+    // Offline (both fail) -> rejects so FetchTracker can show retry UI.
+    callWS.mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline'));
+    await expect(fetchSensorHistory(hass, 'sensor.x', 168, now)).rejects.toThrow('offline');
   });
 });

@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { SPRINGS, SpringValue } from '../motion/spring';
 import { define } from './define';
+import { attachSwipeShield, capturePointer, releasePointer, SliderIntent } from './gesture';
 import './m3e-icon';
 
 /**
@@ -34,6 +35,8 @@ export class M3eSlider extends LitElement {
   @state() private pressed = false;
 
   private dragging = false;
+  private readonly intent = new SliderIntent();
+  private detachShield?: () => void;
   private display = new SpringValue(0, SPRINGS.spatialDefault, (p) => this.style.setProperty('--p', String(p)));
 
   static override styles = css`
@@ -47,7 +50,7 @@ export class M3eSlider extends LitElement {
       display: block;
       position: relative;
       height: var(--h);
-      touch-action: none;
+      touch-action: pan-y;
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
@@ -146,20 +149,24 @@ export class M3eSlider extends LitElement {
     this.setAttribute('role', 'slider');
     this.addEventListener('pointerdown', this.onDown);
     this.addEventListener('keydown', this.onKey);
+    this.detachShield = attachSwipeShield(this, () => !this.disabled);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener('pointerdown', this.onDown);
     this.removeEventListener('keydown', this.onKey);
+    this.detachShield?.();
+    this.detachShield = undefined;
+    this.endDrag();
     this.display.stop();
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has('disabled')) {
       this.syncDisabled();
-      // Disabled mid-drag: let go without reporting a value.
-      if (this.disabled && this.dragging) this.endDrag();
+      // Disabled mid-drag or mid-pending touch: let go without reporting a value.
+      if (this.disabled && (this.dragging || this.intent.pending)) this.endDrag();
     }
     if ((changed.has('value') || changed.has('min') || changed.has('max')) && !this.dragging) {
       const p = this.fraction(this.value);
@@ -202,21 +209,35 @@ export class M3eSlider extends LitElement {
     this.dispatchEvent(new CustomEvent(type, { detail: { value: this.value }, bubbles: true, composed: true }));
   }
 
-  private onDown = (e: PointerEvent): void => {
-    if (this.disabled || e.button !== 0) return;
-    e.stopPropagation();
-    this.setPointerCapture(e.pointerId);
+  private beginDrag(e: PointerEvent): void {
+    capturePointer(this, e.pointerId);
     this.pressed = true;
     this.dragging = true;
     this.value = this.valueAt(e.clientX);
-    this.display.set(this.fraction(this.value)); // tap: glide there
+    this.display.set(this.fraction(this.value)); // tap / drag start: glide there
     this.emit('input');
-    this.addEventListener('pointermove', this.onMove);
-    this.addEventListener('pointerup', this.onUp);
-    this.addEventListener('pointercancel', this.onUp);
+  }
+
+  private onDown = (e: PointerEvent): void => {
+    if (this.disabled || e.button !== 0) return;
+    e.stopPropagation();
+    this.endDrag();
+    window.addEventListener('pointermove', this.onMove);
+    window.addEventListener('pointerup', this.onUp);
+    window.addEventListener('pointercancel', this.onCancel);
+    if (this.intent.down(e)) this.beginDrag(e);
   };
 
   private onMove = (e: PointerEvent): void => {
+    const res = this.intent.move(e);
+    if (res === 'none') {
+      if (!this.intent.pending && !this.intent.dragging) this.endDrag();
+      return;
+    }
+    if (res === 'start') {
+      this.beginDrag(e);
+      return;
+    }
     const v = this.valueAt(e.clientX);
     if (v === this.value) return;
     this.value = v;
@@ -226,15 +247,33 @@ export class M3eSlider extends LitElement {
   };
 
   private onUp = (e: PointerEvent): void => {
-    if (this.hasPointerCapture(e.pointerId)) this.releasePointerCapture(e.pointerId);
+    const res = this.intent.up(e);
+    if (res === 'none') return;
+    if (res === 'tap') {
+      this.value = this.valueAt(e.clientX);
+      this.display.set(this.fraction(this.value));
+      this.emit('input');
+      this.endDrag();
+      this.emit('change');
+      return;
+    }
+    releasePointer(this, e.pointerId);
     this.endDrag();
     this.emit('change');
   };
 
+  private onCancel = (e: PointerEvent): void => {
+    const wasDragging = this.intent.cancel(e);
+    releasePointer(this, e.pointerId);
+    this.endDrag();
+    if (wasDragging) this.emit('change');
+  };
+
   private endDrag(): void {
-    this.removeEventListener('pointermove', this.onMove);
-    this.removeEventListener('pointerup', this.onUp);
-    this.removeEventListener('pointercancel', this.onUp);
+    window.removeEventListener('pointermove', this.onMove);
+    window.removeEventListener('pointerup', this.onUp);
+    window.removeEventListener('pointercancel', this.onCancel);
+    this.intent.reset();
     this.pressed = false;
     this.dragging = false;
     this.display.spec = SPRINGS.spatialDefault;

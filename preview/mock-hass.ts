@@ -547,7 +547,23 @@ export class MockHass {
         if (msg.type === 'history/history_during_period') return mockHistory(msg) as T;
         if (msg.type === 'energy/get_prefs') return ENERGY_PREFS as T;
         if (msg.type === 'todo/item/list') return { items: this.todo.map((i) => ({ ...i })) } as T;
-        if (msg.type === 'recorder/statistics_during_period') return mockStatistics(msg) as T;
+        if (msg.type === 'recorder/statistics_during_period') {
+          const base: Record<string, unknown[]> = { ...mockStatistics(msg) };
+          const ids = (msg.statistic_ids as string[] | undefined) ?? [];
+          const start = Date.parse(String(msg.start_time));
+          const end = Date.parse(String(msg.end_time));
+          const step = String(msg.period) === 'day' ? 86400_000 : 3600_000;
+          for (const id of ids) {
+            if (base[id]) continue;
+            const rows: { start: number; end: number; mean: number; min: number; max: number }[] = [];
+            for (let t = start; t < end; t += step) {
+              const v = historyValue(id, t);
+              if (v !== undefined) rows.push({ start: t, end: t + step, mean: v, min: v - 0.6, max: v + 0.6 });
+            }
+            if (rows.length) base[id] = rows;
+          }
+          return base as T;
+        }
         throw new Error(`mock: ${String(msg.type)} not implemented`);
       },
       connection: {

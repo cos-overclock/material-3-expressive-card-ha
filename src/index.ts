@@ -28,7 +28,10 @@ import './cards/maintenance-card';
 import './cards/remote-card';
 import './cards/timer-card';
 import './cards/weather-card';
+import { installFocusAnchor } from './ha/focus-anchor';
 import { SUGGESTIONS, type EntitySuggestion } from './suggestions';
+
+if (typeof window !== 'undefined') installFocusAnchor();
 
 declare global {
   interface Window {

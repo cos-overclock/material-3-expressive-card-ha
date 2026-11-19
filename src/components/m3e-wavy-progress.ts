@@ -2,6 +2,7 @@ import { LitElement, css, html, svg } from 'lit';
 import { property, query } from 'lit/decorators.js';
 import { SPRINGS, SpringValue, prefersReducedMotion } from '../motion/spring';
 import { define } from './define';
+import { attachSwipeShield, capturePointer, releasePointer, SliderIntent } from './gesture';
 
 /**
  * M3 Expressive wavy linear progress. The played part is a sine wave that
@@ -44,7 +45,12 @@ export class M3eWavyProgress extends LitElement {
   private phase = 0;
   private raf = 0;
   private ro?: ResizeObserver;
+  private io?: IntersectionObserver;
+  private onScreen = true;
+  private tabVisible = true;
   private dragging = false;
+  private readonly intent = new SliderIntent();
+  private detachShield?: () => void;
   private amp = new SpringValue(0, SPRINGS.spatialDefault, () => this.draw());
   private progress = new SpringValue(0, SPRINGS.effectsDefault, () => this.draw());
   /** 0 = no handle, GRIP_REST = resting handle, 1 = pressed handle. */
@@ -60,7 +66,7 @@ export class M3eWavyProgress extends LitElement {
     }
     :host([seekable]) {
       cursor: pointer;
-      touch-action: none;
+      touch-action: pan-y;
       user-select: none;
     }
     :host(:focus-visible) svg {
@@ -112,20 +118,41 @@ export class M3eWavyProgress extends LitElement {
       this.draw();
     });
     this.ro.observe(this);
+    this.onScreen = true;
+    this.tabVisible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    document.addEventListener('visibilitychange', this.onVisibility);
+    if (typeof IntersectionObserver !== 'undefined') {
+      this.io = new IntersectionObserver(
+        (entries) => {
+          if (!entries.length) return;
+          this.onScreen = entries.some((e) => e.isIntersecting);
+          this.syncLoop();
+        },
+        { threshold: 0 },
+      );
+      this.io.observe(this);
+    }
     this.addEventListener('pointerdown', this.onDown);
     this.addEventListener('keydown', this.onKey);
     this.addEventListener('focus', this.onFocus);
     this.addEventListener('blur', this.onBlur);
+    this.detachShield = attachSwipeShield(this, () => this.seekable);
     this.loop();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.ro?.disconnect();
+    this.io?.disconnect();
+    this.io = undefined;
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.removeEventListener('pointerdown', this.onDown);
     this.removeEventListener('keydown', this.onKey);
     this.removeEventListener('focus', this.onFocus);
     this.removeEventListener('blur', this.onBlur);
+    this.detachShield?.();
+    this.detachShield = undefined;
+    this.endDrag();
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.amp.stop();
@@ -141,6 +168,10 @@ export class M3eWavyProgress extends LitElement {
       else this.progress.set(v);
     }
     if (changed.has('seekable')) {
+      if (!this.seekable && (this.dragging || this.intent.pending)) {
+        this.endDrag();
+        this.updateAmplitude();
+      }
       if (!this.dragging) this.grip.set(this.gripRest);
       if (this.seekable) {
         this.tabIndex = 0;
@@ -176,22 +207,36 @@ export class M3eWavyProgress extends LitElement {
     this.dispatchEvent(new CustomEvent(type, { detail: { value: this.value }, bubbles: true, composed: true }));
   }
 
-  private onDown = (e: PointerEvent): void => {
-    if (!this.seekable || e.button !== 0) return;
-    e.stopPropagation();
-    this.setPointerCapture(e.pointerId);
+  private beginDrag(e: PointerEvent): void {
+    capturePointer(this, e.pointerId);
     this.dragging = true;
     this.grip.set(1);
     this.updateAmplitude();
     this.value = this.fractionAt(e.clientX);
-    this.progress.set(this.value, SPRINGS.spatialDefault); // tap: glide there
+    this.progress.set(this.value, SPRINGS.spatialDefault); // tap / drag start: glide there
     this.emit('input');
-    this.addEventListener('pointermove', this.onMove);
-    this.addEventListener('pointerup', this.onUp);
-    this.addEventListener('pointercancel', this.onUp);
+  }
+
+  private onDown = (e: PointerEvent): void => {
+    if (!this.seekable || e.button !== 0) return;
+    e.stopPropagation();
+    this.endDrag();
+    window.addEventListener('pointermove', this.onMove);
+    window.addEventListener('pointerup', this.onUp);
+    window.addEventListener('pointercancel', this.onCancel);
+    if (this.intent.down(e)) this.beginDrag(e);
   };
 
   private onMove = (e: PointerEvent): void => {
+    const res = this.intent.move(e);
+    if (res === 'none') {
+      if (!this.intent.pending && !this.intent.dragging) this.endDrag();
+      return;
+    }
+    if (res === 'start') {
+      this.beginDrag(e);
+      return;
+    }
     const v = this.fractionAt(e.clientX);
     if (v === this.value) return;
     this.value = v;
@@ -200,16 +245,42 @@ export class M3eWavyProgress extends LitElement {
   };
 
   private onUp = (e: PointerEvent): void => {
-    if (this.hasPointerCapture(e.pointerId)) this.releasePointerCapture(e.pointerId);
-    this.removeEventListener('pointermove', this.onMove);
-    this.removeEventListener('pointerup', this.onUp);
-    this.removeEventListener('pointercancel', this.onUp);
-    this.dragging = false;
-    this.progress.spec = SPRINGS.effectsDefault;
-    this.grip.set(this.matches(':focus-visible') ? 1 : this.gripRest);
-    this.updateAmplitude();
+    const res = this.intent.up(e);
+    if (res === 'none') return;
+    if (res === 'tap') {
+      this.value = this.fractionAt(e.clientX);
+      this.progress.set(this.value, SPRINGS.spatialDefault);
+      this.emit('input');
+      this.endDrag();
+      this.emit('change');
+      return;
+    }
+    releasePointer(this, e.pointerId);
+    this.finishDrag();
     this.emit('change');
   };
+
+  private onCancel = (e: PointerEvent): void => {
+    const wasDragging = this.intent.cancel(e);
+    releasePointer(this, e.pointerId);
+    this.finishDrag();
+    if (wasDragging) this.emit('change');
+  };
+
+  private finishDrag(): void {
+    this.endDrag();
+    this.grip.set(this.matches(':focus-visible') ? 1 : this.gripRest);
+    this.updateAmplitude();
+  }
+
+  private endDrag(): void {
+    window.removeEventListener('pointermove', this.onMove);
+    window.removeEventListener('pointerup', this.onUp);
+    window.removeEventListener('pointercancel', this.onCancel);
+    this.intent.reset();
+    this.dragging = false;
+    this.progress.spec = SPRINGS.effectsDefault;
+  }
 
   private onKey = (e: KeyboardEvent): void => {
     if (!this.seekable) return;
@@ -239,14 +310,32 @@ export class M3eWavyProgress extends LitElement {
 
   // ── drawing ───────────────────────────────────────────────
 
+  private readonly onVisibility = (): void => {
+    this.tabVisible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    this.syncLoop();
+  };
+
+  private syncLoop(): void {
+    if (this.onScreen && this.tabVisible) {
+      this.loop();
+    } else if (this.raf) {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+  }
+
   private loop(): void {
-    if (this.raf || !this.playing || prefersReducedMotion() || !this.isConnected) return;
+    if (this.raf || !this.playing || prefersReducedMotion() || !this.isConnected || !this.onScreen || !this.tabVisible) return;
     let last = performance.now();
     const tick = (now: number) => {
+      if (!this.onScreen || !this.tabVisible || !this.isConnected) {
+        this.raf = 0;
+        return;
+      }
       this.phase += ((now - last) / 1000) * Math.PI * 2 * 0.6; // 0.6 cycles/s
       last = now;
       this.draw();
-      this.raf = this.playing || this.amp.animating ? requestAnimationFrame(tick) : 0;
+      this.raf = (this.playing || this.amp.animating) && this.onScreen && this.tabVisible ? requestAnimationFrame(tick) : 0;
     };
     this.raf = requestAnimationFrame(tick);
   }

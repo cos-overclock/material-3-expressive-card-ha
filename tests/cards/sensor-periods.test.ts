@@ -111,4 +111,25 @@ describe('sensor period buttons', () => {
     await settle(card);
     expect(hass.callWS).toHaveBeenCalledTimes(3);
   });
+
+  it('uses long-term statistics over 48h and preserves true statistical min/max peaks', async () => {
+    const hass = mockHass([ent('sensor.t', '21.0', { device_class: 'temperature', unit_of_measurement: '°C' })]);
+    const nowMs = Date.now();
+    hass.callWS.mockImplementation(async (msg: unknown) => {
+      const m = msg as { type?: string };
+      if (m.type === 'recorder/statistics_during_period') {
+        return {
+          'sensor.t': [
+            { start: nowMs - 100 * 3600_000, mean: 20.5, min: 14.2, max: 27.8 },
+            { start: nowMs - 50 * 3600_000, mean: 21.0, min: 19.0, max: 22.5 },
+          ],
+        };
+      }
+      return { 'sensor.t': [] };
+    });
+    const card = await mount('m3e-sensor-card', { entity: 'sensor.t', hours: 168 }, hass);
+    expect(hass.callWS).toHaveBeenCalledWith(expect.objectContaining({ type: 'recorder/statistics_during_period', period: 'hour' }));
+    expect(text($(card, '.stats'))).toContain('27.8°');
+    expect(text($(card, '.stats'))).toContain('14.2°');
+  });
 });
