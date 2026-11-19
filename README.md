@@ -248,6 +248,8 @@ summary:                 # 「2か所が開」。0件なら「すべて閉」
 
 状態がわからないエンティティ（存在しない、`unavailable`、`unknown`）は、当てはまる数にも当てはまらない数にも入れません。1つでもあれば「1件不明」のように書き足し、`zero_text` は出しません。通信できない鍵があるのに「すべて正常」と出ることはありません。書き足す文言は `unknown_text` で変えられます（既定は `{unknown}件不明`）。`text` に `{unknown}` を入れた場合は書き足しません。`summary: { type: date }` と書くと、今日の日付（「11月13日（金）」）を出します。
 
+`collapsible: true` を付けると、見出しをタップして次の見出しまでのカードを折りたためます（編集モード中は自動で開きます）。開閉状態は `collapse_memory`（`device` / `user` / `session`）または `collapse_entity`（`input_boolean` 等）で保存できます。`action: { name: 全消灯, icon: power-settings-new, tap_action: ... }` で右側にクイックアクションボタンも置けます。
+
 ### `custom:m3e-hero-card` 時計と天気
 
 ```yaml
@@ -340,7 +342,7 @@ vertical_vanes:      # 上下風向のボタンを明示したい場合（省略
   - { mode: '5', angle: 90 }
 ```
 
-運転モードによってカード全体の色が変わります（暖房 peach、冷房 blue、除湿 teal、送風 green、自動 lavender）。
+運転モードによってカード全体の色が変わります（暖房 peach、冷房 blue、除湿 teal、送風 green、自動 lavender）。また `hvac_action` に応じて、実際に暖房・冷房中のときは内側の枠が発光し、設定温度に達して待機中（`idle`）のときは控えめな表示になります（`show_activity_glow: false` で枠の発光を消せます）。
 
 運転モードが `heat_cool` で、エアコンに下限と上限の温度（`target_temp_low`・`target_temp_high`）があるときは、「暖房（下限）」と「冷房（上限）」の2つの温度をそれぞれの −/＋ で設定します。下限と上限は1刻み以上離れたままにします。
 
@@ -640,7 +642,7 @@ rooms:
 
 吸引力（`fan_speed_list`）を持つ掃除機では、「吸引力」のチップ（静か・標準・ターボ・最大など）で切り替えられます。`show_fan_speed: false` で消せます。場所を音で知らせる機能（`locate`）に対応していれば、見出しの右にボタンを出します。
 
-部屋のチップを選んで「掃除を始める」を押すと、選んだ部屋だけを掃除します。既定では Roborock・Xiaomi 向けに `vacuum.send_command` で `app_segment_clean` を送ります。ほかの機種では `room_service` にスクリプトを指定すると、`segments` と `rooms`（部屋名）を変数として渡します。部屋を選ばなければ `vacuum.start` です。
+部屋のチップを選んで「掃除を始める」を押すと、選んだ部屋だけを掃除します。既定では Roborock・Xiaomi 向けに `vacuum.send_command` で `app_segment_clean` を送ります。ほかの機種では `room_service` にスクリプトを指定すると、`segments` と `rooms`（部屋名）を変数として渡します。部屋を選ばなければ `vacuum.start` です。ポーリング間隔が長い機種でも操作直後に状態を仮表示し、HA からの応答やエラーで確定・復帰します。
 
 ### `custom:m3e-laundry-card` 洗濯機・洗濯乾燥機
 
@@ -675,7 +677,7 @@ schedule:
   - { type: びん・缶・ペットボトル, days: [thu], weeks: [1, 3] }   # 第1・第3木曜
   - { type: 粗大ゴミ, dates: ['2026-11-25'] }
 # calendar: calendar.gomi    # カレンダーの予定（タイトルが種類）を収集日として使うことも可
-# done_entity: input_boolean.garbage_done   # 省略すると「出した」はこの端末に記録
+# done_entity: input_boolean.garbage_done   # 省略すると HA のユーザーデータに記録（端末間同期・元に戻す通知つき）
 note: 前日 20:00 にスマホへ通知します
 ```
 
@@ -775,12 +777,15 @@ HA のエリアに入っているエンティティをまとめて表示しま�
 ```yaml
 type: custom:m3e-maintenance-card
 battery_threshold: 20                # この残量（%）以下の電池を出す
+group_by_device: true                # 利用できない機器をデバイス単位で1行にまとめる（既定）
+critical_hours: 24                   # この時間以上オフラインなら赤く強調
+mute_default_hours: 24               # ベルボタンの既定ミュート時間
 exclude: ['sensor.*_rssi', 'sensor.old_*']   # * が使える
 max_items: 5                         # 項目ごとの件数（超えた分は「ほか N件」）
 # show_batteries / show_updates / show_unavailable: false で項目を消せる
 ```
 
-電池残量の少ない機器（`device_class: battery` のセンサーと、電池切れの binary_sensor）、アップデートのある `update` エンティティ、利用できなくなったエンティティを一覧にします。何もなければ「すべて正常です」と出します。各行をタップすると詳細ダイアログを開き、アップデートの行は「更新」ボタンでインストールできます（管理者のみ）。利用できないエンティティは HA 全体を調べるため、1分ごとに読み直します。
+電池残量の少ない機器（`device_class: battery` のセンサーと、電池切れの binary_sensor）、アップデートのある `update` エンティティ、利用できなくなった機器を一覧にします。電池の行は残量に応じた背景バーで表示し、利用できない機器は既定で HA デバイス単位に集約（補助ヘルパー除外・HA 再起動をまたぐ経過時間の履歴復元）します。ベルボタンで一時ミュート（長押し・右クリック・Shift+Enter で期間選択、スナックバーから元に戻すことも可、ユーザーデータに同期）できます。何もなければ「すべて正常です」と出します。各行をタップすると詳細ダイアログを開き、アップデートの行は「更新」ボタンでインストールできます（管理者のみ）。利用できないエンティティは HA 全体を調べるため、1分ごとに読み直します。
 
 ### `custom:m3e-remote-card` テレビのリモコン
 

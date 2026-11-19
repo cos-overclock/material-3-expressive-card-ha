@@ -87,8 +87,43 @@ export interface ClimateCardConfig extends BaseCardConfig {
   labels?: { fan?: Record<string, string>; swing?: Record<string, string>; hvac?: Record<string, string>; preset?: Record<string, string> };
   /** Preset buttons (preset_modes: eco, sleep, boost…). Default true; shown only when the entity has presets. */
   show_presets?: boolean;
+  /** Show the activity glow frame and running/idle contrast based on `hvac_action`. Default true. */
+  show_activity_glow?: boolean;
   /** Explicit vertical vane buttons, e.g. [{mode: swing, label: スイング}, {mode: '1', angle: 0}, …] */
   vertical_vanes?: VaneOption[];
+}
+
+export interface ClimateActivity {
+  accent: Accent | 'neutral';
+  active: boolean;
+  running: boolean;
+  actionAccent?: Accent;
+}
+
+const ACTION_ACCENT: Record<string, Accent> = {
+  heating: 'peach',
+  preheating: 'peach',
+  cooling: 'blue',
+  drying: 'teal',
+  fan: 'green',
+  defrosting: 'sky',
+};
+
+/**
+ * Resolves the card's accent and running vs standby visual state from `hvac_mode`
+ * and `hvac_action` (e.g. heating/cooling vs idle/standby vs off).
+ */
+export function resolveClimateActivity(mode: string, hvacAction: string | undefined, unavailable: boolean): ClimateActivity {
+  if (unavailable || mode === 'off') return { accent: 'neutral', active: false, running: false };
+  const runningAccent = hvacAction ? ACTION_ACCENT[hvacAction] : undefined;
+  if (runningAccent) return { accent: runningAccent, active: true, running: true, actionAccent: runningAccent };
+  const modeAccent = MODE_ACCENT[mode] ?? 'lavender';
+  if (hvacAction === 'idle' || hvacAction === 'off') {
+    const actionAccent = mode === 'heat' ? 'peach' : mode === 'cool' ? 'blue' : undefined;
+    return { accent: modeAccent, active: true, running: false, actionAccent };
+  }
+  const actionAccent = modeAccent === 'neutral' ? undefined : modeAccent;
+  return { accent: modeAccent, active: true, running: true, actionAccent };
 }
 
 const MODE_ACCENT: Record<string, Accent | 'neutral'> = {
@@ -262,6 +297,27 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         flex-direction: column;
         gap: 16px;
       }
+      .card::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        opacity: 0;
+        transition:
+          opacity var(--m3e-effects-default),
+          box-shadow var(--m3e-effects-default);
+      }
+      .card.running::after {
+        opacity: 1;
+        box-shadow:
+          inset 0 0 0 1.5px color-mix(in srgb, var(--accent-fill) 65%, transparent),
+          inset 0 0 22px -4px color-mix(in srgb, var(--accent-fill) 22%, transparent);
+      }
+      .card.standby-framed::after {
+        opacity: 1;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-fill) 28%, transparent);
+      }
       .header {
         display: flex;
         align-items: center;
@@ -271,6 +327,10 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         --m3e-shape-color: var(--accent-fill);
         color: var(--accent-on-fill);
         cursor: pointer;
+      }
+      .card.standby .header m3e-shape {
+        --m3e-shape-color: var(--accent-container);
+        color: var(--accent-on-container);
       }
       .text {
         flex: 1;
@@ -283,6 +343,22 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         font: 400 13px / 20px var(--m3e-font-plain);
         color: var(--accent-fill);
         transition: color var(--m3e-effects-default);
+      }
+      .card.standby .state {
+        color: var(--m3-on-surface-variant);
+      }
+      .activity-dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: 1px;
+        background: var(--accent-fill);
+      }
+      .activity-dot.idle {
+        background: transparent;
+        box-shadow: inset 0 0 0 1.5px var(--m3-on-surface-variant);
       }
       [data-accent='neutral'] .state {
         color: var(--m3-on-surface-variant);
@@ -656,6 +732,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         { name: 'show_fan_panel', default: true, selector: { boolean: {} } },
         { name: 'expanded', selector: { boolean: {} } },
         { name: 'show_presets', default: true, selector: { boolean: {} } },
+        { name: 'show_activity_glow', default: true, selector: { boolean: {} } },
         ...ROW_KEYS.map((k) => ({
           name: `${k}_section`,
           type: 'expandable',
@@ -688,7 +765,12 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
           const t = ROW_TITLE[m[1] as RowKey];
           return { section: t, mode: `${t}を表示`, mode_entity: `${t}の設定エンティティ`, auto_entity: `${t}のオート・マニュアル切り替え`, control: `${t}の操作部` }[m[2]];
         }
-        return ({ show_fan_panel: '風量・風向を表示', expanded: '風量・風向を最初から開く', show_presets: 'プリセット（エコ・おやすみなど）を表示' } as Record<
+        return ({
+          show_fan_panel: '風量・風向を表示',
+          expanded: '風量・風向を最初から開く',
+          show_presets: 'プリセット（エコ・おやすみなど）を表示',
+          show_activity_glow: '稼働中のフレーム発光を表示',
+        } as Record<
           string,
           string
         >)[s.name];
@@ -1146,7 +1228,17 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
     const s = this.stateObj(this.config.entity);
     const a = this.attrs;
     const mode = s?.state ?? 'off';
-    const accent = MODE_ACCENT[mode] ?? 'lavender';
+    const activity = resolveClimateActivity(mode, a.hvac_action as string | undefined, isUnavailable(s));
+    const glow = this.config.show_activity_glow !== false;
+    const cardClasses = [
+      'card',
+      isUnavailable(s) ? 'unavailable' : '',
+      activity.running && glow ? 'running' : '',
+      activity.active && !activity.running ? 'standby' : '',
+      activity.active && !activity.running && activity.actionAccent && glow ? 'standby-framed' : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
     const off = mode === 'off';
     const name = this.config.name ?? (a.friendly_name as string) ?? this.config.entity;
     const humidity = a.current_humidity ?? this.stateObj(this.config.humidity_entity)?.state;
@@ -1162,7 +1254,7 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
       .filter(Boolean)
       .join('・');
 
-    return html`<div class="card ${isUnavailable(s) ? 'unavailable' : ''}" data-accent=${accent}>
+    return html`<div class=${cardClasses} data-accent=${activity.accent}>
       <div class="header">
         <m3e-shape
           .shape=${off ? 'circle' : 'cookie9'}
@@ -1174,7 +1266,12 @@ export class M3eClimateCard extends M3eBaseCard<ClimateCardConfig> {
         </m3e-shape>
         <div class="text">
           <p class="name">${name}</p>
-          <p class="state">${this.compact ? this.compactStateLine(mode, humidity) : this.stateLine(mode)}</p>
+          <p class="state">
+            ${activity.active ? html`<span class="activity-dot ${activity.running ? 'on' : 'idle'}" aria-hidden="true"></span>` : nothing}${this
+              .compact
+              ? this.compactStateLine(mode, humidity)
+              : this.stateLine(mode)}
+          </p>
         </div>
         <button class="icon-btn power" aria-label=${off ? '運転' : '停止'} @click=${this.power}>
           <m3e-icon icon="power-settings-new"></m3e-icon>

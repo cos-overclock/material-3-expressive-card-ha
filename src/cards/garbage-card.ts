@@ -6,9 +6,11 @@ import { field, listOf } from '../editor/form-helpers';
 import { isActive } from '../ha/helpers';
 import { DAYS, ruleHits, ymd, type Rule } from '../ha/garbage-rules';
 import { FetchTracker } from '../ha/fetch-state';
+import { loadUserData, readLocal, saveUserData } from '../ha/user-data';
 import type { LovelaceGridOptions } from '../ha/types';
 import { ACCENTS, type Accent } from '../theme/tokens';
 import { define } from '../components/define';
+import { showSnackbar } from '../components/m3e-snackbar';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
 import '../components/m3e-fetch-status';
@@ -49,6 +51,23 @@ const GUESS: [RegExp, Accent][] = [
 ];
 
 const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const GARBAGE_USER_DATA_KEY = 'm3e_garbage_done';
+
+function readLegacyDone(key: string): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function removeLegacyDone(key: string): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Garbage collection: the next collection day large with a "出した" button,
@@ -63,9 +82,11 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
   static override accentHint = '色を指定していないゴミの種類は、名前から決まる色の代わりにこの色になります。';
 
   @state() private calendarDays: Collection[] = [];
-  @state() private localDone = '';
+  @state() private doneMap: Record<string, 1> = readLocal<Record<string, 1>>(GARBAGE_USER_DATA_KEY) ?? {};
   @state() private pressed = false;
   private loadedAt = 0;
+  private syncedUserData = false;
+  private localDirty = false;
   private readonly fetch = new FetchTracker<Collection[]>(this, { label: 'm3e-garbage-card' });
 
   static override styles = [
@@ -382,8 +403,21 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
     return new Date(this.clockNow);
   }
 
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.syncedUserData = false;
+    this.localDirty = false;
+  }
+
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
+    if (this.hass && !this.config.done_entity && !this.syncedUserData) {
+      this.syncedUserData = true;
+      void loadUserData<Record<string, 1>>(this.hass, GARBAGE_USER_DATA_KEY).then((remote) => {
+        if (!this.isConnected || this.config?.done_entity || this.localDirty || !remote || typeof remote !== 'object') return;
+        this.doneMap = { ...remote };
+      });
+    }
     const cal = this.config.calendar;
     if (!cal) {
       if (this.fetch.status !== 'idle') {
@@ -460,32 +494,52 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
   }
 
   private doneKey(c: Collection): string {
-    return `m3e-garbage-done:${ymd(c.date)}:${c.types.join('|')}`;
+    return `${ymd(c.date)}:${c.types.join('|')}`;
+  }
+
+  private legacyDoneKey(c: Collection): string {
+    return `m3e-garbage-done:${this.doneKey(c)}`;
   }
 
   private isDone(c: Collection): boolean {
     if (this.config.done_entity) return isActive(this.stateObj(this.config.done_entity));
-    if (this.localDone === this.doneKey(c)) return true;
-    try {
-      return localStorage.getItem(this.doneKey(c)) === '1';
-    } catch {
-      return false;
+    return !!this.doneMap[this.doneKey(c)] || readLegacyDone(this.legacyDoneKey(c));
+  }
+
+  private setDone(c: Collection, done: boolean): void {
+    if (this.config.done_entity) {
+      this.call('homeassistant', done ? 'turn_on' : 'turn_off', {}, this.config.done_entity);
+      return;
     }
+    this.localDirty = true;
+    const key = this.doneKey(c);
+    const cutoff = dayStart(this.now).getTime() - 2 * 86400_000;
+    const next: Record<string, 1> = {};
+    for (const [k, v] of Object.entries(this.doneMap)) {
+      if (!v) continue;
+      const dayPart = k.split(':')[0];
+      const ts = Date.parse(`${dayPart}T00:00:00`);
+      if (!Number.isFinite(ts) || ts >= cutoff) next[k] = 1;
+    }
+    if (done) next[key] = 1;
+    else {
+      delete next[key];
+      removeLegacyDone(this.legacyDoneKey(c));
+    }
+    this.doneMap = next;
+    void saveUserData(this.hass, GARBAGE_USER_DATA_KEY, next);
   }
 
   private toggleDone(c: Collection): void {
-    const done = this.isDone(c);
-    if (this.config.done_entity) {
-      this.call('homeassistant', done ? 'turn_off' : 'turn_on', {}, this.config.done_entity);
-      return;
+    const nextDone = !this.isDone(c);
+    this.setDone(c, nextDone);
+    if (nextDone && !this.config.done_entity) {
+      showSnackbar({
+        message: `「${c.types.join('・')}」を出したとして記録しました`,
+        action: { label: '元に戻す', onAction: () => this.setDone(c, false) },
+        theme: this.getAttribute('theme') === 'mocha' ? 'mocha' : 'latte',
+      });
     }
-    try {
-      if (done) localStorage.removeItem(this.doneKey(c));
-      else localStorage.setItem(this.doneKey(c), '1');
-    } catch {
-      // Storage blocked: keep it for this session only.
-    }
-    this.localDone = done ? '' : this.doneKey(c);
   }
 
   protected renderCard() {

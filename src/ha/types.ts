@@ -22,9 +22,18 @@ export interface HomeAssistant {
   /** Entity / device / area registries (HA 2023.x+ frontend). */
   entities?: Record<
     string,
-    { entity_id: string; area_id?: string | null; device_id?: string | null; display_precision?: number; hidden?: boolean; entity_category?: string | null }
+    {
+      entity_id: string;
+      area_id?: string | null;
+      device_id?: string | null;
+      display_precision?: number;
+      hidden?: boolean;
+      hidden_by?: string | null;
+      entity_category?: string | null;
+      platform?: string | null;
+    }
   >;
-  devices?: Record<string, { id: string; area_id?: string | null }>;
+  devices?: Record<string, { id: string; area_id?: string | null; name?: string | null; name_by_user?: string | null; entry_type?: string | null }>;
   areas?: Record<string, { area_id: string; name: string; icon?: string | null }>;
   locale?: { language: string };
   user?: { id: string; name: string; is_admin?: boolean };

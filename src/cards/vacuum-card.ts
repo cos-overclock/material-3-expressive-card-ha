@@ -4,6 +4,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, actionsSection, TAP_ACTION_FIELD, type BaseCardConfig } from './base-card';
 import { field, listOf } from '../editor/form-helpers';
 import { hhmm, isUnavailable, numState } from '../ha/helpers';
+import { OptimisticState } from '../ha/optimistic-state';
 import type { HassEntity, LovelaceGridOptions } from '../ha/types';
 import type { Accent } from '../theme/tokens';
 import { define } from '../components/define';
@@ -125,6 +126,11 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
   @state() private picked = new Set<string>();
   @state() private pressed = '';
   private pickedInit = false;
+  private readonly optimistic = new OptimisticState<string>({
+    ttlMs: 30_000,
+    overriding: ['error', 'unavailable'],
+    onExpire: () => this.requestUpdate(),
+  });
 
   static override styles = [
     M3eBaseCard.styles,
@@ -323,6 +329,10 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
         display: flex;
         gap: 4px;
         height: 48px;
+        transition: opacity var(--m3e-effects-default);
+      }
+      .actions.pending {
+        opacity: 0.78;
       }
       .act {
         flex: 1 1 0;
@@ -500,11 +510,25 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
     this.picked = next;
   }
 
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.optimistic.clear();
+  }
+
+  private sendCommand(expectedState: string, call: Promise<unknown>): void {
+    this.optimistic.set(expectedState);
+    this.requestUpdate();
+    call.catch(() => {
+      this.optimistic.clear();
+      this.requestUpdate();
+    });
+  }
+
   /** Start: the picked rooms if any, else everywhere. */
   private start(): void {
     const s = this.stateObj(this.config.entity);
     if (s?.state === 'paused') {
-      this.call('vacuum', 'start', {}, this.config.entity);
+      this.sendCommand('cleaning', this.call('vacuum', 'start', {}, this.config.entity));
       return;
     }
     const rooms = this.rooms().filter((r) => this.picked.has(r.name));
@@ -518,17 +542,17 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
       })
       .filter((v): v is string | number => v !== undefined);
     if (!rooms.length || !segments.length) {
-      this.call('vacuum', 'start', {}, this.config.entity);
+      this.sendCommand('cleaning', this.call('vacuum', 'start', {}, this.config.entity));
       return;
     }
     const svc = this.config.room_service;
     if (svc?.startsWith('script.')) {
-      this.call('script', 'turn_on', { variables: { segments, rooms: rooms.map((r) => r.name) } }, svc);
+      this.sendCommand('cleaning', this.call('script', 'turn_on', { variables: { segments, rooms: rooms.map((r) => r.name) } }, svc));
     } else if (svc) {
       const [domain, service] = svc.split('.');
-      if (domain && service) this.call(domain, service, { segments }, this.config.entity);
+      if (domain && service) this.sendCommand('cleaning', this.call(domain, service, { segments }, this.config.entity));
     } else {
-      this.call('vacuum', 'send_command', { command: 'app_segment_clean', params: segments }, this.config.entity);
+      this.sendCommand('cleaning', this.call('vacuum', 'send_command', { command: 'app_segment_clean', params: segments }, this.config.entity));
     }
   }
 
@@ -574,7 +598,7 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
   protected renderCard() {
     const c = this.config;
     const s = this.stateObj(c.entity);
-    const st = s?.state ?? 'unavailable';
+    const { value: st, pending } = this.optimistic.resolve(s?.state ?? 'unavailable');
     const off = isUnavailable(s);
     const running = RUNNING.has(st);
     const roomEnt = this.stateObj(c.current_room_entity);
@@ -589,7 +613,8 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
     const totalArea = pickedRooms.reduce((a, r) => a + (r.area ?? 0), 0);
     const idx = room ? pickedRooms.findIndex((r) => r.name === room) : -1;
     const next = idx >= 0 ? pickedRooms[idx + 1]?.name : undefined;
-    const statusLine = [STATE_LABEL[st] ?? st, st === 'cleaning' && room ? room : ''].filter(Boolean).join('・');
+    const baseLabel = STATE_LABEL[st] ?? st;
+    const statusLine = [pending ? `${baseLabel}…` : baseLabel, st === 'cleaning' && room ? room : ''].filter(Boolean).join('・');
     const lastT = Date.parse(this.stateObj(c.last_clean_entity)?.state ?? '');
     const lastDur = duration(this.stateObj(c.last_clean_duration_entity));
     const filter = this.stateObj(c.filter_entity);
@@ -674,9 +699,12 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
 
       ${this.renderFanSpeed(off)}
 
-      <div class="actions" data-accent=${c.color ?? 'teal'}>
+      <div class="actions ${pending ? 'pending' : ''}" aria-busy=${pending ? 'true' : 'false'} data-accent=${c.color ?? 'teal'}>
         ${st === 'cleaning'
-          ? this.act('main', '一時停止', html`<m3e-icon icon="pause"></m3e-icon>`, () => this.call('vacuum', 'pause', {}, c.entity), { primary: true })
+          ? this.act('main', '一時停止', html`<m3e-icon icon="pause"></m3e-icon>`, () =>
+              this.sendCommand('paused', this.call('vacuum', 'pause', {}, c.entity)),
+              { primary: true },
+            )
           : this.act(
               'main',
               st === 'paused' ? '再開' : pickedRooms.length ? `${pickedRooms.length}部屋を掃除` : '掃除を始める',
@@ -684,10 +712,11 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
               () => this.start(),
               { primary: true, disabled: off },
             )}
-        ${this.act('stop', '停止', html`<span class="stop-glyph"></span>`, () => this.call('vacuum', 'stop', {}, c.entity), {
+        ${this.act('stop', '停止', html`<span class="stop-glyph"></span>`, () => this.sendCommand('idle', this.call('vacuum', 'stop', {}, c.entity)), {
           disabled: off || !(running || st === 'paused'),
         })}
-        ${this.act('dock', '充電台へ', html`<m3e-icon icon="home"></m3e-icon>`, () => this.call('vacuum', 'return_to_base', {}, c.entity), {
+        ${this.act('dock', '充電台へ', html`<m3e-icon icon="home"></m3e-icon>`, () =>
+          this.sendCommand('returning', this.call('vacuum', 'return_to_base', {}, c.entity)), {
           disabled: off || st === 'docked' || st === 'returning',
         })}
       </div>

@@ -127,6 +127,8 @@ function initialStates(): HassEntity[] {
     entity('update.home_assistant_core', 'off', { friendly_name: 'Home Assistant Core', installed_version: '2026.11.1', latest_version: '2026.11.1' }),
     entity('sensor.hallway_motion_battery', '12', { friendly_name: '廊下の人感センサーの電池', device_class: 'battery', unit_of_measurement: '%' }),
     entity('sensor.balcony_temperature', 'unavailable', { friendly_name: 'ベランダの温度', device_class: 'temperature', unit_of_measurement: '°C' }),
+    entity('switch.balcony_plug', 'unavailable', { friendly_name: 'ベランダのスマートプラグ' }),
+    entity('sensor.balcony_plug_power', 'unavailable', { friendly_name: 'ベランダの消費電力', device_class: 'power', unit_of_measurement: 'W' }),
     entity('climate.kids_ac', 'heat_cool', {
       friendly_name: '子ども部屋のエアコン',
       hvac_modes: ['off', 'heat_cool', 'heat', 'cool'],
@@ -341,6 +343,17 @@ const ENTITY_AREA: Record<string, string> = {
   'humidifier.bedroom': 'bedroom',
   'climate.bedroom_ac': 'bedroom',
   'binary_sensor.bedroom_motion': 'bedroom',
+  'switch.balcony_plug': 'living',
+  'sensor.balcony_plug_power': 'living',
+};
+
+const ENTITY_DEVICE: Record<string, string> = {
+  'switch.balcony_plug': 'plug_balcony',
+  'sensor.balcony_plug_power': 'plug_balcony',
+};
+
+const DEVICES = {
+  plug_balcony: { id: 'plug_balcony', name: 'ベランダのスマートプラグ', area_id: 'living' },
 };
 
 /** Synthetic daily curves for the history API, by device class. */
@@ -435,7 +448,10 @@ const FORECAST = (() => {
 export class MockHass {
   private states: Record<string, HassEntity> = {};
   /** Entity registry: stable between updates, as HA's is. */
-  private registry = Object.fromEntries(Object.entries(ENTITY_AREA).map(([entity_id, area_id]) => [entity_id, { entity_id, area_id }]));
+  private registry = Object.fromEntries(
+    Object.entries(ENTITY_AREA).map(([entity_id, area_id]) => [entity_id, { entity_id, area_id, device_id: ENTITY_DEVICE[entity_id] }]),
+  );
+  private userData = new Map<string, unknown>();
   private listeners = new Set<Listener>();
   darkMode = false;
   /** Simulated device latency. */
@@ -516,6 +532,7 @@ export class MockHass {
       states: this.states,
       themes: { darkMode: this.darkMode },
       areas: Object.fromEntries(Object.entries(AREAS).map(([area_id, name]) => [area_id, { area_id, name }])),
+      devices: DEVICES,
       entities: this.registry,
       user: { id: 'preview', name: 'プレビュー', is_admin: true },
       locale: { language: 'ja' },
@@ -547,6 +564,11 @@ export class MockHass {
         if (msg.type === 'history/history_during_period') return mockHistory(msg) as T;
         if (msg.type === 'energy/get_prefs') return ENERGY_PREFS as T;
         if (msg.type === 'todo/item/list') return { items: this.todo.map((i) => ({ ...i })) } as T;
+        if (msg.type === 'frontend/get_user_data') return { value: this.userData.get(String(msg.key)) ?? null } as T;
+        if (msg.type === 'frontend/set_user_data') {
+          this.userData.set(String(msg.key), msg.value);
+          return null as T;
+        }
         if (msg.type === 'recorder/statistics_during_period') {
           const base: Record<string, unknown[]> = { ...mockStatistics(msg) };
           const ids = (msg.statistic_ids as string[] | undefined) ?? [];
