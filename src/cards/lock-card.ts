@@ -108,7 +108,11 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
   @state() private pending: Pending;
   @state() private error = '';
   private holdRaf = 0;
+  private holdTimer?: ReturnType<typeof setTimeout>;
   private holdStart = 0;
+  private holdSource?: 'pointer' | 'key';
+  private holdCompleted = false;
+  private suppressTimer?: ReturnType<typeof setTimeout>;
   private release = new SpringValue(0, SPRINGS.spatialFast, (v) => (this.hold = Math.max(0, v)));
   private confirmTimer?: ReturnType<typeof setTimeout>;
   private lastPhase?: Phase;
@@ -524,6 +528,15 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     cancelAnimationFrame(this.holdRaf);
+    this.holdRaf = 0;
+    clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
+    clearTimeout(this.confirmTimer);
+    this.confirmTimer = undefined;
+    clearTimeout(this.suppressTimer);
+    this.suppressTimer = undefined;
+    this.holding = false;
+    this.holdCompleted = false;
     this.release.stop();
   }
 
@@ -561,7 +574,7 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
 
   private numericCode(): boolean {
     const fmt = String(this.stateObj(this.config.entity)?.attributes.code_format ?? '');
-    return fmt === 'number' || /\\d|\[0-9\]/.test(fmt);
+    return fmt === 'number' || (!/[a-zA-Z]/.test(fmt.replace(/\\d/g, '')) && /\\d|0-9/.test(fmt));
   }
 
   /** Run a command now, or ask for the PIN first. */
@@ -578,7 +591,7 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
 
   private async send(service: 'lock' | 'unlock' | 'open', code?: string): Promise<void> {
     try {
-      await this.hass?.callService('lock', service, code ? { code } : {}, { entity_id: this.config.entity });
+      await this.call('lock', service, code ? { code } : {}, this.config.entity);
       this.pending = undefined;
       this.keypad?.clear();
     } catch (e) {
@@ -597,7 +610,14 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     return this.config.hold_time ?? 800;
   }
 
-  private startHold(): void {
+  private startHold(source: 'pointer' | 'key'): void {
+    cancelAnimationFrame(this.holdRaf);
+    this.holdRaf = 0;
+    clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
+    clearTimeout(this.suppressTimer);
+    this.holdSource = source;
+    this.holdCompleted = false;
     this.holding = true;
     this.release.stop();
     const from = this.hold;
@@ -608,6 +628,8 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
       if (p >= 1) {
         this.holding = false;
         this.holdRaf = 0;
+        this.holdTimer = undefined;
+        if (this.holdSource === 'pointer') this.holdCompleted = true;
         navigator.vibrate?.(20);
         this.request('unlock');
         return;
@@ -616,18 +638,23 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     };
     if (prefersReducedMotion()) {
       // Still a deliberate hold, just without the animated ring.
-      this.holdRaf = window.setTimeout(() => tick(performance.now() + this.holdTime), this.holdTime) as unknown as number;
+      this.holdTimer = setTimeout(() => tick(performance.now() + this.holdTime), this.holdTime);
       return;
     }
     this.holdRaf = requestAnimationFrame(tick);
   }
 
   private cancelHold(): void {
+    if (this.holdCompleted) {
+      clearTimeout(this.suppressTimer);
+      this.suppressTimer = setTimeout(() => (this.holdCompleted = false), 0);
+    }
     if (!this.holding) return;
     this.holding = false;
     cancelAnimationFrame(this.holdRaf);
-    clearTimeout(this.holdRaf);
     this.holdRaf = 0;
+    clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
     this.dropRing();
   }
 
@@ -640,12 +667,17 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     } catch {
       // Pointer already gone; the hold still works until pointerup / leave.
     }
-    this.startHold();
+    this.startHold('pointer');
   };
 
   private onUp = (): void => this.cancelHold();
 
   private onClick = (): void => {
+    if (this.holdCompleted) {
+      this.holdCompleted = false;
+      clearTimeout(this.suppressTimer);
+      return;
+    }
     const phase = phaseOf(this.stateObj(this.config.entity));
     if (phase === 'unlocked' || phase === 'open' || phase === 'jammed') {
       this.request('lock');
@@ -664,7 +696,7 @@ export class M3eLockCard extends M3eBaseCard<LockCardConfig> {
     e.preventDefault();
     const phase = phaseOf(this.stateObj(this.config.entity));
     if (phase === 'locked' && this.config.hold_to_unlock !== false) {
-      if (!e.repeat && !this.holding) this.startHold();
+      if (!e.repeat && !this.holding) this.startHold('key');
     } else if (!e.repeat) this.onClick();
   };
 

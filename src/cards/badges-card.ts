@@ -2,14 +2,14 @@ import { css, html, nothing } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
-import { checkSummary, type Issue } from '../editor/validate';
+import { checkEntity, checkOneOf, checkSummary, type Issue } from '../editor/validate';
 import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { defaultIconFor, stateText } from '../ha/domain';
 import { formatSensor } from '../ha/format';
 import { domainOf, isUnavailable } from '../ha/helpers';
 import { summaryEntities, summaryText, type Summary } from '../ha/summary';
 import type { HassEntity, HomeAssistant, LovelaceGridOptions } from '../ha/types';
-import type { Accent } from '../theme/tokens';
+import { ACCENTS, type Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-icon';
 import '../components/m3e-rolling-text';
@@ -196,9 +196,25 @@ export class M3eBadgesCard extends M3eBaseCard<BadgesCardConfig> {
   }
 
   static override validateConfig(c: Record<string, unknown>): Issue[] {
-    return ((c.badges as unknown[] | undefined) ?? []).flatMap((b, i) =>
-      b && typeof b === 'object' && (b as { type?: unknown }).type ? checkSummary(c, `badges.${i}`, `バッジ ${i + 1}`) : [],
-    );
+    const out: Issue[] = [...checkOneOf(c, 'align', ['start', 'center', 'end'], '並べ方')];
+    if (!Array.isArray(c.badges) || !c.badges.length) {
+      out.push({ path: 'badges', level: 'error', message: 'badges: list at least one badge', hint: 'バッジを1つ以上指定してください' });
+      return out;
+    }
+    c.badges.forEach((b, i) => {
+      if (typeof b === 'string') {
+        out.push(...checkEntity({ badges: { [i]: b } }, `badges.${i}`, undefined, `バッジ ${i + 1}`, true));
+        return;
+      }
+      if (!b || typeof b !== 'object') {
+        out.push({ path: `badges.${i}`, level: 'error', message: `badges.${i} must be an entity id or object`, hint: `バッジ ${i + 1} の設定が正しくありません` });
+        return;
+      }
+      if ((b as { type?: unknown }).type) out.push(...checkSummary(c, `badges.${i}`, `バッジ ${i + 1}`));
+      else out.push(...checkEntity(c, `badges.${i}.entity`, undefined, `バッジ ${i + 1}`, true));
+      out.push(...checkOneOf(c, `badges.${i}.color`, ACCENTS, `バッジ ${i + 1} の色`));
+    });
+    return out;
   }
 
   protected normalizeConfig(config: BadgesCardConfig): BadgesCardConfig {

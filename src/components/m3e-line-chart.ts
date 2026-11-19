@@ -70,6 +70,8 @@ export class M3eLineChart extends LitElement {
   @state() private hover: number | null = null;
 
   private revealed = false;
+  private scrubbing = false;
+  private scrubPointerId?: number;
 
   static override styles = css`
     :host {
@@ -144,8 +146,15 @@ export class M3eLineChart extends LitElement {
     }
   `;
 
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.scrubbing = false;
+    this.scrubPointerId = undefined;
+    this.hover = null;
+  }
+
   private range(): [number, number] {
-    const vals = this.values.filter((v): v is number => v !== null);
+    const vals = this.values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
     let lo = this.min ?? Math.min(...vals);
     let hi = this.max ?? Math.max(...vals);
     if (!vals.length) [lo, hi] = [0, 1];
@@ -155,26 +164,36 @@ export class M3eLineChart extends LitElement {
       hi = this.max ?? mid + this.minSpan / 2;
     }
     const pad = (hi - lo) * 0.12;
-    return [this.min ?? lo - pad, this.max ?? hi + pad];
+    lo = this.min ?? lo - pad;
+    hi = this.max ?? hi + pad;
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [0, 1];
+    if (hi <= lo) hi = lo + (this.minSpan > 0 ? this.minSpan : 1);
+    return [lo, hi];
   }
 
   /** Points in the 1000×100 viewBox (y down). */
-  private points(): [number, number][] {
-    const [lo, hi] = this.range();
+  private points(lo: number, hi: number): [number, number][] {
     const n = this.values.length;
     const out: [number, number][] = [];
     this.values.forEach((v, i) => {
-      if (v === null) return;
+      if (typeof v !== 'number' || !Number.isFinite(v)) return;
       out.push([n > 1 ? (i / (n - 1)) * W : W, H - ((v - lo) / (hi - lo || 1)) * H]);
     });
     return out;
   }
 
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('values') && this.hover !== null && (!this.scrubbing || this.hover >= this.values.length || this.values[this.hover] == null)) {
+      this.hover = null;
+    }
+  }
+
   protected override updated(changed: PropertyValues<this>): void {
-    if (changed.has('values') && !this.revealed && this.values.some((v) => v !== null)) {
+    const count = this.values.reduce<number>((n, v) => n + (typeof v === 'number' && Number.isFinite(v) ? 1 : 0), 0);
+    if (changed.has('values') && !this.revealed && count >= 4) {
       this.revealed = true;
       const plot = this.renderRoot.querySelector('.plot') as HTMLElement | null;
-      if (!plot || prefersReducedMotion()) return;
+      if (!plot || typeof plot.animate !== 'function' || prefersReducedMotion()) return;
       const t = springTransition(SPRINGS.effectsSlow);
       plot.animate([{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0 0 0)' }], {
         duration: Math.max(t.duration, 700),
@@ -187,12 +206,13 @@ export class M3eLineChart extends LitElement {
     const n = this.values.length;
     if (!n) return null;
     const r = this.getBoundingClientRect();
+    if (r.width <= 0) return null;
     const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-    let i = Math.round(p * (n - 1));
+    const i = Math.round(p * (n - 1));
     // Snap to the nearest sample that has data.
     for (let d = 0; d < n; d++) {
-      if (this.values[i - d] != null) return i - d;
-      if (this.values[i + d] != null) return i + d;
+      if (typeof this.values[i - d] === 'number' && Number.isFinite(this.values[i - d])) return i - d;
+      if (typeof this.values[i + d] === 'number' && Number.isFinite(this.values[i + d])) return i + d;
     }
     return null;
   }
@@ -203,24 +223,57 @@ export class M3eLineChart extends LitElement {
     this.dispatchEvent(new CustomEvent('scrub', { detail: { index: i }, bubbles: true, composed: true }));
   }
 
-  private onMove = (e: PointerEvent) => this.scrub && this.setHover(this.indexAt(e));
-  private onLeave = () => this.scrub && this.setHover(null);
+  private onDown = (e: PointerEvent) => {
+    if (!this.scrub || e.button !== 0) return;
+    this.scrubbing = true;
+    this.scrubPointerId = e.pointerId;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic events may not have an active pointer */
+    }
+    this.setHover(this.indexAt(e));
+  };
+
+  private onMove = (e: PointerEvent) => {
+    if (!this.scrub) return;
+    if (this.scrubbing && this.scrubPointerId !== undefined && e.pointerId !== this.scrubPointerId) return;
+    if (e.pointerType && e.pointerType !== 'mouse' && !this.scrubbing) return;
+    this.setHover(this.indexAt(e));
+  };
+
+  private onUp = (e: PointerEvent) => {
+    if (this.scrubPointerId !== undefined && e.pointerId !== this.scrubPointerId) return;
+    const el = e.currentTarget as HTMLElement;
+    if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    this.scrubbing = false;
+    this.scrubPointerId = undefined;
+    if (this.scrub && e.pointerType !== 'mouse') this.setHover(null);
+  };
+
+  private onLeave = (e: PointerEvent) => {
+    if (this.scrubbing && e.type === 'pointerleave') return;
+    this.scrubbing = false;
+    this.scrubPointerId = undefined;
+    if (this.scrub) this.setHover(null);
+  };
 
   protected override render() {
-    const all = this.points();
+    const [lo, hi] = this.range();
+    const all = this.points(lo, hi);
     // Too little history (a sensor added minutes ago) draws a sliver at the
     // right edge that reads as a glitch. Draw no line until there is a trend.
     const pts = all.length >= 4 ? all : [];
     const line = monotonePath(pts);
     const areaPath = pts.length ? `${line}L${pts[pts.length - 1][0]},${H}L${pts[0][0]},${H}Z` : '';
     const last = all[all.length - 1];
-    const [lo, hi] = this.range();
     const n = this.values.length;
     const hv = this.hover !== null ? this.values[this.hover] : null;
     return html`<div
       class="plot ${this.revealed || !pts.length ? '' : 'hidden'}"
       @pointermove=${this.onMove}
-      @pointerdown=${this.onMove}
+      @pointerdown=${this.onDown}
+      @pointerup=${this.onUp}
       @pointerleave=${this.onLeave}
       @pointercancel=${this.onLeave}
     >

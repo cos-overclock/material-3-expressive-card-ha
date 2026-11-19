@@ -98,4 +98,36 @@ describe('m3e-agenda-card calendars', () => {
     expect(text($(card, 'm3e-fetch-status'))).toMatch(/\d+:\d\d 更新/);
     warn.mockRestore();
   });
+
+  it('sorts events by day before all-day priority and filters ended all-day events', async () => {
+    const now = new Date();
+    const ymd = (offset: number) => {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const laterToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 50).toISOString();
+    const hass = mockHass([ent('calendar.home', 'off')]);
+    hass.callApi.mockResolvedValue([
+      { summary: '昨日の終日', start: { date: ymd(-1) }, end: { date: ymd(0) } },
+      { summary: '明日の終日', start: { date: ymd(1) }, end: { date: ymd(2) } },
+      { summary: '今日の予定', start: { dateTime: laterToday } },
+      { summary: '今日の終日', start: { date: ymd(0) }, end: { date: ymd(1) } },
+    ]);
+    const card = await mount('m3e-agenda-card', { calendars: ['calendar.home'] }, hass);
+    expect($$(card, '.event .t').map(text)).toEqual(['今日の終日', '今日の予定', '明日の終日']);
+  });
+
+  it('refetches when reconnected after being disconnected mid-fetch', async () => {
+    const hass = mockHass([ent('todo.shop', '1')]);
+    const slow = deferred<unknown>();
+    hass.callWS.mockReturnValueOnce(slow.promise).mockResolvedValue(items('牛乳'));
+    const card = await mount('m3e-agenda-card', { todo: 'todo.shop', hide_add: true }, hass);
+    card.remove();
+    slow.resolve(items('古い'));
+    await settle(card);
+    document.body.appendChild(card);
+    await settle(card);
+    expect(hass.callWS).toHaveBeenCalledTimes(2);
+    expect($$(card, '.item').map(text)).toEqual(['牛乳']);
+  });
 });

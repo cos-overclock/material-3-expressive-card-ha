@@ -23,9 +23,8 @@ export interface FetchView {
  * that a newer fetch has overtaken, records when data last arrived, and tells
  * an empty answer apart from a failure. The host re-renders on every change.
  *
- * The key names what the data belongs to (entity, window…). A fetch for
- * another key takes the old data off: `run()` reports the change through
- * `onKeyChange` before the new fetch starts.
+ * The key names what the data belongs to (entity, window…). Callers clear
+ * stale screen data when `shownKey !== key` before starting a new fetch.
  */
 export class FetchTracker<T> implements ReactiveController {
   status: FetchStatus = 'idle';
@@ -35,6 +34,7 @@ export class FetchTracker<T> implements ReactiveController {
   key?: string;
   /** Key of the data on screen (the last successful fetch). */
   shownKey?: string;
+  private shownStatus?: 'ok' | 'empty';
   private seq = 0;
 
   constructor(
@@ -54,7 +54,15 @@ export class FetchTracker<T> implements ReactiveController {
   hostDisconnected(): void {
     // An answer arriving after the card left the page is dropped.
     this.seq++;
-    if (this.status === 'loading') this.status = this.shownKey ? 'ok' : 'idle';
+    if (this.status === 'loading') {
+      if (this.shownKey && this.shownKey === this.key) {
+        this.status = this.shownStatus ?? 'ok';
+      } else {
+        this.status = 'idle';
+        // Let the next connect refetch instead of treating the aborted key as current.
+        this.key = this.shownKey;
+      }
+    }
   }
 
   /** The state for <m3e-fetch-status>. */
@@ -78,6 +86,7 @@ export class FetchTracker<T> implements ReactiveController {
       // The data on screen belongs to another key: it no longer counts.
       if (this.shownKey !== key) {
         this.shownKey = undefined;
+        this.shownStatus = undefined;
         this.updatedAt = undefined;
       }
     }
@@ -90,7 +99,9 @@ export class FetchTracker<T> implements ReactiveController {
       apply(value);
       this.shownKey = key;
       this.updatedAt = Date.now();
-      this.status = (this.opts.isEmpty ?? isEmptyValue)(value) ? 'empty' : 'ok';
+      const settled = (this.opts.isEmpty ?? isEmptyValue)(value) ? 'empty' : 'ok';
+      this.shownStatus = settled;
+      this.status = settled;
       return true;
     } catch (e) {
       if (seq !== this.seq) return false;
@@ -111,6 +122,7 @@ export class FetchTracker<T> implements ReactiveController {
     this.error = undefined;
     this.key = undefined;
     this.shownKey = undefined;
+    this.shownStatus = undefined;
     this.host.requestUpdate();
   }
 }

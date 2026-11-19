@@ -64,7 +64,7 @@ describe('FetchTracker', () => {
     warn.mockRestore();
   });
 
-  it('drops an answer that arrives after the card left the page', async () => {
+  it('drops an answer that arrives after the card left the page and clears the aborted key', async () => {
     const { h, controllers } = host();
     const t = new FetchTracker<string>(h);
     const slow = deferred<string>();
@@ -75,6 +75,21 @@ describe('FetchTracker', () => {
     expect(await p).toBe(false);
     expect(applied).toEqual([]);
     expect(t.status).toBe('idle');
+    expect(t.key).toBeUndefined();
+  });
+
+  it('keeps empty status when a background refresh is aborted by disconnect', async () => {
+    const { h, controllers } = host();
+    const t = new FetchTracker<number[]>(h);
+    await t.run('a', async () => [], () => {});
+    expect(t.status).toBe('empty');
+    const slow = deferred<number[]>();
+    const p = t.run('a', () => slow.promise, () => {});
+    controllers[0].hostDisconnected?.();
+    expect(t.status).toBe('empty');
+    expect(t.key).toBe('a');
+    slow.resolve([1]);
+    expect(await p).toBe(false);
   });
 });
 
@@ -87,6 +102,7 @@ describe('status labels', () => {
   it('phrases each status for a subtitle', () => {
     const now = at + 60_000;
     expect(statusPhrase({ status: 'ok', updatedAt: at, hasData: true }, undefined, now)).toBe('9:05 更新');
+    expect(statusPhrase({ status: 'ok', hasData: false }, undefined, now)).toBe('');
     expect(statusPhrase({ status: 'loading', hasData: false }, undefined, now)).toBe('読み込み中…');
     expect(statusPhrase({ status: 'loading', updatedAt: at, hasData: true }, undefined, now)).toBe('9:05 更新・更新中…');
     expect(statusPhrase({ status: 'empty', updatedAt: at, hasData: true }, '履歴なし', now)).toBe('履歴なし');

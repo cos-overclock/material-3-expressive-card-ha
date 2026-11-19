@@ -2,12 +2,12 @@ import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
-import { checkEntity, checkNumber, type Issue } from '../editor/validate';
+import { checkEntity, checkNumber, checkOneOf, type Issue } from '../editor/validate';
 import { field, listOf, idsToObjects } from '../editor/form-helpers';
 import { hhmm } from '../ha/helpers';
 import { FetchTracker } from '../ha/fetch-state';
 import type { LovelaceGridOptions } from '../ha/types';
-import type { Accent } from '../theme/tokens';
+import { ACCENTS, type Accent } from '../theme/tokens';
 import { SPRINGS, prefersReducedMotion, springTransition } from '../motion/spring';
 import { define } from '../components/define';
 import '../components/m3e-icon';
@@ -83,6 +83,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   private readonly todoFetch = new FetchTracker<TodoItem[]>(this, { label: 'm3e-agenda-card (to-do)' });
   private errorTimer?: ReturnType<typeof setTimeout>;
   private positions = new Map<string, number>();
+  private nextUid = 0;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -356,14 +357,34 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   }
 
   static override validateConfig(c: Record<string, unknown>): Issue[] {
-    return [
-      ...((c.calendars as unknown[] | undefined) ?? []).flatMap((cal, i) =>
-        checkEntity({ calendars: { [i]: typeof cal === 'string' ? cal : (cal as { entity?: unknown } | undefined)?.entity } }, `calendars.${i}`, ['calendar'], `カレンダー ${i + 1}`, true),
-      ),
+    const out: Issue[] = [];
+    if (c.calendars !== undefined && !Array.isArray(c.calendars)) {
+      out.push({ path: 'calendars', level: 'error', message: 'calendars must be a list', hint: 'カレンダーはリストで書いてください' });
+    } else if (Array.isArray(c.calendars)) {
+      c.calendars.forEach((cal, i) => {
+        out.push(
+          ...checkEntity(
+            { calendars: { [i]: typeof cal === 'string' ? cal : (cal as { entity?: unknown } | undefined)?.entity } },
+            `calendars.${i}`,
+            ['calendar'],
+            `カレンダー ${i + 1}`,
+            true,
+          ),
+        );
+        if (cal && typeof cal === 'object') {
+          out.push(...checkOneOf(cal, 'color', ACCENTS, `カレンダー ${i + 1} の色`).map((iss) => ({ ...iss, path: `calendars.${i}.color` })));
+        }
+      });
+    }
+    out.push(
       ...checkEntity(c, 'todo', ['todo'], 'To-do リスト'),
       ...checkNumber(c, 'days', { min: 1, max: 31, integer: true, label: '表示する日数', unit: '日' }),
       ...checkNumber(c, 'show_completed', { min: 0, max: 50, integer: true, label: 'チェック済みを残す件数' }),
-    ];
+    );
+    if ((!Array.isArray(c.calendars) || !c.calendars.length) && !c.todo) {
+      out.push({ path: 'calendars', level: 'error', message: 'calendars or todo is required', hint: 'カレンダーか To-do リストを指定してください' });
+    }
+    return out;
   }
 
   protected normalizeConfig(config: AgendaCardConfig): AgendaCardConfig {
@@ -463,7 +484,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
     await this.eventsFetch.run(
       key,
       async () => {
-        const lists = await Promise.all(
+        const results = await Promise.allSettled(
           cals.map(async (cal) => {
             const raw = await hass.callApi!<
               { uid?: string; summary: string; location?: string; start: { date?: string; dateTime?: string }; end?: { date?: string; dateTime?: string } }[]
@@ -476,13 +497,27 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
                 location: e.location || undefined,
                 allDay,
                 start: allDay ? new Date(`${e.start.date}T00:00:00`) : new Date(e.start.dateTime!),
-                end: e.end?.dateTime ? new Date(e.end.dateTime) : undefined,
+                end: e.end?.date ? new Date(`${e.end.date}T00:00:00`) : e.end?.dateTime ? new Date(e.end.dateTime) : undefined,
                 cal,
               };
             });
           }),
         );
-        return lists.flat().sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.getTime() - b.start.getTime());
+        const lists: CalEvent[][] = [];
+        let firstError: unknown;
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') lists.push(r.value);
+          else {
+            if (firstError === undefined) firstError = r.reason;
+            console.warn(`m3e-agenda-card: failed to fetch ${cals[i].entity}`, r.reason);
+          }
+        });
+        if (!lists.length && firstError !== undefined) throw firstError;
+        const todayMs = start.getTime();
+        const sortDay = (e: CalEvent) => (e.allDay ? Math.max(todayMs, dayStart(e.start).getTime()) : dayStart(e.start).getTime());
+        return lists
+          .flat()
+          .sort((a, b) => sortDay(a) - sortDay(b) || Number(b.allDay) - Number(a.allDay) || a.start.getTime() - b.start.getTime());
       },
       (events) => (this.events = events),
     );
@@ -502,11 +537,13 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
       todo,
       async () => (await hass.callWS!<{ items: TodoItem[] }>({ type: 'todo/item/list', entity_id: todo })).items,
       (items) => {
-        // An item still being updated keeps its new status until HA answers.
-        this.items = items.map((i) => {
+        // Keep optimistic additions and in-flight status changes until HA catches up.
+        const pendingAdds = this.items.filter((i) => i.uid.startsWith('pending-') && this.pending.has(i.uid));
+        const mapped = items.map((i) => {
           const mine = this.pending.has(i.uid) ? this.items.find((x) => x.uid === i.uid) : undefined;
           return mine ? { ...i, status: mine.status } : i;
         });
+        this.items = [...pendingAdds, ...mapped];
       },
     );
   }
@@ -553,7 +590,7 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
       return;
     }
     // Shown at once, marked as sending; the next fetch of the list replaces it with HA's item.
-    const uid = `pending-${Date.now()}`;
+    const uid = `pending-${Date.now()}-${this.nextUid++}`;
     this.items = [{ uid, summary: text, status: 'needs_action' }, ...this.items];
     this.setPending(uid, true);
     this.draft = '';
@@ -575,7 +612,8 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
 
   private eventLine(e: CalEvent): string {
     const today = dayStart(new Date());
-    const day = Math.round((dayStart(e.start).getTime() - today.getTime()) / 86400_000);
+    const rawDay = Math.round((dayStart(e.start).getTime() - today.getTime()) / 86400_000);
+    const day = e.allDay && rawDay < 0 ? 0 : rawDay;
     const prefix = day === 0 ? '' : day === 1 ? '明日 ' : `${e.start.getMonth() + 1}/${e.start.getDate()} `;
     const time = e.allDay ? '終日' : day === 0 && e.end ? `${hhmm(e.start)} – ${hhmm(e.end)}` : hhmm(e.start);
     return `${prefix}${time}${e.location ? `・${e.location}` : ''}`;
@@ -583,8 +621,11 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
 
   private renderEvents() {
     const now = Date.now();
-    // Hide what has already ended today.
-    const list = this.events.filter((e) => e.allDay || (e.end ?? e.start).getTime() > now);
+    const todayMs = dayStart(new Date(now)).getTime();
+    // Hide what has already ended today (all-day events have exclusive end.date).
+    const list = this.events.filter((e) =>
+      e.allDay ? (e.end ? e.end.getTime() > todayMs : dayStart(e.start).getTime() >= todayMs) : (e.end ?? e.start).getTime() > now,
+    );
     const days = this.config.days ?? 2;
     return html`<div class="head">
         <span class="title">${this.config.title ?? (days === 1 ? '今日の予定' : days === 2 ? '今日と明日の予定' : `${days}日間の予定`)}</span>
@@ -680,6 +721,8 @@ export class M3eAgendaCard extends M3eBaseCard<AgendaCardConfig> {
   }
 
   override disconnectedCallback(): void {
+    if (this.eventsFetch.status === 'loading' || this.eventsFetch.status === 'idle') this.eventsFor = undefined;
+    if (this.todoFetch.status === 'loading' || this.todoFetch.status === 'idle') this.todoState = undefined;
     super.disconnectedCallback();
     clearTimeout(this.errorTimer);
     this.todoError = '';

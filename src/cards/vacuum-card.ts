@@ -88,8 +88,15 @@ const RUNNING = new Set(['cleaning', 'returning']);
 function duration(s: HassEntity | undefined): string {
   const v = numState(s);
   if (v === undefined) return '';
-  const unit = String(s!.attributes.unit_of_measurement ?? 'min');
-  const min = unit === 's' ? v / 60 : unit === 'h' ? v * 60 : unit === 'd' ? v * 1440 : v;
+  const unit = String(s!.attributes.unit_of_measurement ?? 'min').trim().toLowerCase();
+  const min =
+    unit === 's' || unit.startsWith('sec')
+      ? v / 60
+      : unit === 'h' || unit === 'hr' || unit.startsWith('hour')
+        ? v * 60
+        : unit === 'd' || unit.startsWith('day')
+          ? v * 1440
+          : v;
   const m = Math.round(min);
   return m >= 60 ? `${Math.floor(m / 60)}時間${m % 60 ? `${m % 60}分` : ''}` : `${m}分`;
 }
@@ -501,7 +508,15 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
       return;
     }
     const rooms = this.rooms().filter((r) => this.picked.has(r.name));
-    const segments = rooms.map((r) => r.segment).filter((v) => v !== undefined);
+    const segments = rooms
+      .map((r) => {
+        if (typeof r.segment === 'number') return Number.isFinite(r.segment) ? r.segment : undefined;
+        if (typeof r.segment !== 'string') return undefined;
+        const trimmed = r.segment.trim();
+        if (!trimmed) return undefined;
+        return /^-?\d+$/.test(trimmed) ? Number(trimmed) : trimmed;
+      })
+      .filter((v): v is string | number => v !== undefined);
     if (!rooms.length || !segments.length) {
       this.call('vacuum', 'start', {}, this.config.entity);
       return;
@@ -511,7 +526,7 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
       this.call('script', 'turn_on', { variables: { segments, rooms: rooms.map((r) => r.name) } }, svc);
     } else if (svc) {
       const [domain, service] = svc.split('.');
-      this.call(domain, service, { segments }, this.config.entity);
+      if (domain && service) this.call(domain, service, { segments }, this.config.entity);
     } else {
       this.call('vacuum', 'send_command', { command: 'app_segment_clean', params: segments }, this.config.entity);
     }
@@ -562,11 +577,12 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
     const st = s?.state ?? 'unavailable';
     const off = isUnavailable(s);
     const running = RUNNING.has(st);
-    const room = this.stateObj(c.current_room_entity)?.state;
+    const roomEnt = this.stateObj(c.current_room_entity);
+    const room = roomEnt && !isUnavailable(roomEnt) ? roomEnt.state : undefined;
     const name = c.name ?? (s?.attributes.friendly_name as string) ?? c.entity;
     const bat = this.battery(s);
     const pct = numState(this.stateObj(c.progress_entity));
-    const rem = numState(this.stateObj(c.remaining_entity));
+    const remText = duration(this.stateObj(c.remaining_entity));
     const area = numState(this.stateObj(c.cleaned_area_entity));
     const rooms = this.rooms();
     const pickedRooms = rooms.filter((r) => this.picked.has(r.name));
@@ -577,11 +593,13 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
     const lastT = Date.parse(this.stateObj(c.last_clean_entity)?.state ?? '');
     const lastDur = duration(this.stateObj(c.last_clean_duration_entity));
     const filter = this.stateObj(c.filter_entity);
-    const filterText = filter
-      ? String(filter.attributes.unit_of_measurement) === '%'
-        ? `${Math.round(numState(filter) ?? 0)}%`
-        : `残り ${duration(filter)}`
-      : '';
+    const filterVal = numState(filter);
+    const filterText =
+      filterVal !== undefined
+        ? String(filter?.attributes.unit_of_measurement) === '%'
+          ? `${Math.round(filterVal)}%`
+          : `残り ${duration(filter)}`
+        : '';
     return html`<div class="card ${off ? 'unavailable' : ''}" data-accent=${running || st === 'paused' ? nothing : 'neutral'}>
       <div class="header" @click=${() => this.tapEntity(c.entity)}>
         <m3e-shape .shape=${running || st === 'paused' ? 'cookie9' : 'circle'} size=${this.compact ? 36 : 44} ?spin=${st === 'cleaning'}>
@@ -619,7 +637,7 @@ export class M3eVacuumCard extends M3eBaseCard<VacuumCardConfig> {
                   ? html`<span class="pct"><m3e-rolling-text .text=${`${Math.round(pct)}%`}></m3e-rolling-text></span>`
                   : nothing}</span
               >
-              ${rem !== undefined ? html`<span class="eta"><m3e-icon icon="timer"></m3e-icon>あと約${Math.round(rem)}分</span>` : nothing}
+              ${remText ? html`<span class="eta"><m3e-icon icon="timer"></m3e-icon>あと約${remText}</span>` : nothing}
             </div>
             ${pct !== undefined ? html`<div class="bar"><i style="width:${Math.min(100, Math.max(0, pct))}%"></i></div>` : nothing}
             ${area !== undefined || next

@@ -313,7 +313,8 @@ export class M3eCardEditor extends LitElement {
     if (!step) return;
     e.preventDefault();
     const options = [undefined, ...ACCENTS];
-    const i = options.indexOf(this.config.color);
+    const current = this.config.color && ACCENTS.includes(this.config.color) ? this.config.color : undefined;
+    const i = options.indexOf(current);
     const next = options[(i + step + options.length) % options.length];
     this.pick(next);
     this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>('.swatch[aria-checked="true"]')?.focus());

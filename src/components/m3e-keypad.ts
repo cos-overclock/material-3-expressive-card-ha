@@ -114,6 +114,7 @@ export class M3eKeypad extends LitElement {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 6px;
+      direction: ltr;
     }
     .key {
       all: unset;
@@ -127,6 +128,7 @@ export class M3eKeypad extends LitElement {
       font: 500 22px / 1 var(--m3e-font-brand);
       font-variant-numeric: tabular-nums;
       cursor: pointer;
+      touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
       transition:
         border-radius var(--m3e-spatial-fast),
@@ -199,30 +201,42 @@ export class M3eKeypad extends LitElement {
   private onKey(e: KeyboardEvent): void {
     if (this.numeric && /^\d$/.test(e.key)) this.press(e.key);
     else if (this.numeric && e.key === 'Backspace') this.press('clear');
-    else if (e.key === 'Enter') this.submit();
-    else if (e.key === 'Escape') this.cancel();
+    else if (e.key === 'Enter') {
+      // Let focused buttons handle Enter via their own click handler instead of double-firing or mis-submitting.
+      if (e.target instanceof HTMLButtonElement) return;
+      e.preventDefault();
+      this.submit();
+    } else if (e.key === 'Escape') this.cancel();
   }
 
   protected override render() {
     const verb = this.verb;
-    return html`<div class="pad" @keydown=${this.onKey}>
+    return html`<div class="pad" @keydown=${this.onKey} @animationend=${(e: AnimationEvent) => (e.currentTarget as HTMLElement).classList.remove('shake')}>
       <div class="head">
         <span>${verb}の暗証番号</span>
         ${this.error ? html`<span class="err" role="alert">${this.error}</span>` : nothing}
       </div>
       ${this.numeric
-        ? html`<div class="dots" aria-label="${this.pin.length}桁入力済み">
+        ? html`<div class="dots" role="status" aria-live="polite" aria-label="${this.pin.length}桁入力済み">
               ${Array.from({ length: Math.max(4, this.pin.length) }, (_, i) => html`<i class=${i < this.pin.length ? 'on' : ''}></i>`)}
             </div>
             <div class="keys">
-              ${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => html`<button class="key" @click=${() => this.press(k)}>${k}</button>`)}
-              <button class="key small" @click=${this.cancel}>やめる</button>
-              <button class="key" @click=${() => this.press('0')}>0</button>
+              ${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => html`<button type="button" class="key" @click=${() => this.press(k)}>${k}</button>`)}
+              <button type="button" class="key small" @click=${this.cancel}>やめる</button>
+              <button type="button" class="key" @click=${() => this.press('0')}>0</button>
               ${this.pin
-                ? html`<button class="key go" aria-label=${verb} @click=${this.submit}><m3e-icon icon="check"></m3e-icon></button>`
-                : html`<button class="key small" disabled>${verb}</button>`}
+                ? html`<button type="button" class="key go" aria-label=${verb} @click=${this.submit}><m3e-icon icon="check"></m3e-icon></button>`
+                : html`<button type="button" class="key small" disabled>${verb}</button>`}
             </div>
-            ${this.pin ? html`<button class="key small" style="height:36px" @click=${() => this.press('clear')}>1文字消す</button>` : nothing}`
+            <button
+              type="button"
+              class="key small"
+              style="height:36px"
+              ?disabled=${!this.pin}
+              @click=${() => this.press('clear')}
+            >
+              1文字消す
+            </button>`
         : html`<input
               type="password"
               autocomplete="off"
@@ -234,9 +248,9 @@ export class M3eKeypad extends LitElement {
               }}
             />
             <div class="keys">
-              <button class="key small" @click=${this.cancel}>やめる</button>
+              <button type="button" class="key small" @click=${this.cancel}>やめる</button>
               <span></span>
-              <button class="key go small" ?disabled=${!this.pin} @click=${this.submit}>${verb}</button>
+              <button type="button" class="key go small" ?disabled=${!this.pin} @click=${this.submit}>${verb}</button>
             </div>`}
     </div>`;
   }

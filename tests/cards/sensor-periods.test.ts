@@ -90,6 +90,25 @@ describe('sensor period buttons', () => {
   it('refuses periods out of range', () => {
     const card = document.createElement('m3e-sensor-card') as HTMLElement & { setConfig(c: object): void };
     expect(() => card.setConfig({ type: 'custom:m3e-sensor-card', entity: 'sensor.t', periods: [6, 0] })).toThrow('periods.1 must be a number of hours from 1 to 8760');
+    expect(() => card.setConfig({ type: 'custom:m3e-sensor-card', entity: 'sensor.t', periods: [6, 0.5] })).toThrow('periods.1 must be a number of hours from 1 to 8760');
     expect(() => card.setConfig({ type: 'custom:m3e-sensor-card', entity: 'sensor.t', periods: ['6', '24'] })).not.toThrow();
+  });
+
+  it('keeps full resolution and date ticks for 48h, minute ticks for 1h, and refetches on reconnect', async () => {
+    const hass = mockHass([temp]);
+    hass.callWS.mockImplementation(history);
+    const card = await mount('m3e-sensor-card', { entity: 'sensor.t', hours: 48, periods: [1, 48] }, hass);
+    expect(text($(card, '.axis'))).toMatch(/\d+\/\d+/);
+    const chart = $(card, 'm3e-line-chart') as HTMLElement & { values: (number | null)[] };
+    expect(chart.values.length).toBeGreaterThanOrEqual(48);
+
+    $$($(card, 'm3e-button-group')!, 'button')[0].click();
+    await settle(card);
+    expect(text($(card, '.axis'))).toMatch(/\d+:\d{2}/);
+
+    card.remove();
+    document.body.appendChild(card);
+    await settle(card);
+    expect(hass.callWS).toHaveBeenCalledTimes(3);
   });
 });

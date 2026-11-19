@@ -36,6 +36,7 @@ export class ForecastSubscriptions {
   private received = new Set<ForecastType>();
   private failed = new Map<ForecastType, number>();
   private key = '';
+  private connection?: unknown;
 
   constructor(
     private readonly onForecast: (type: ForecastType, forecast: Forecast[]) => void,
@@ -45,11 +46,12 @@ export class ForecastSubscriptions {
   sync(hass: HomeAssistant | undefined, entityId: string | undefined, types: ForecastType[], now = Date.now()): void {
     if (!hass?.connection) return;
     const key = entityId ? `${entityId}|${types.join(',')}` : '';
-    if (key !== this.key) {
+    if (key !== this.key || hass.connection !== this.connection) {
       const entityChanged = this.key.split('|')[0] !== entityId;
       this.stop();
       if (entityChanged) this.updatedAt = undefined;
       this.key = key;
+      this.connection = hass.connection;
       if (entityId) for (const type of types) this.subscribe(hass, entityId, type);
       this.updateStatus();
       return;
@@ -62,7 +64,7 @@ export class ForecastSubscriptions {
   retry(hass: HomeAssistant | undefined, entityId: string | undefined, types: ForecastType[]): void {
     if (!hass?.connection || !entityId) return;
     const key = `${entityId}|${types.join(',')}`;
-    if (key !== this.key) {
+    if (key !== this.key || hass.connection !== this.connection) {
       this.sync(hass, entityId, types);
       return;
     }
@@ -75,6 +77,8 @@ export class ForecastSubscriptions {
     this.received.clear();
     this.failed.clear();
     this.key = '';
+    this.connection = undefined;
+    this.status = 'idle';
   }
 
   private subscribe(hass: HomeAssistant, entityId: string, type: ForecastType): void {

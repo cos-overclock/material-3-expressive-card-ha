@@ -57,8 +57,8 @@ export const SUGGESTIONS: Record<string, EntitySuggestion> = {
         ])
       : null,
 
-  // layout は省略 = auto: 対応するカラーモードからスライダー／カラー／色温度を選ぶ
-  'm3e-light-card': (_hass, id) => (domainOf(id) === 'light' ? { config: { type: 'custom:m3e-light-card', entity: id } } : null),
+  // auto: 対応するカラーモードからスライダー／カラー／色温度を選ぶ
+  'm3e-light-card': (_hass, id) => (domainOf(id) === 'light' ? { config: { type: 'custom:m3e-light-card', entity: id, layout: 'auto' } } : null),
 
   'm3e-climate-card': (_hass, id) => (domainOf(id) === 'climate' ? { config: { type: 'custom:m3e-climate-card', entity: id } } : null),
 

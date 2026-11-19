@@ -23,7 +23,7 @@ export function statusPhrase(view: FetchView, emptyText = 'データなし', now
     case 'loading':
       return at ? `${at} 更新・更新中…` : '読み込み中…';
     case 'ok':
-      return `${at} 更新`;
+      return at ? `${at} 更新` : '';
     case 'empty':
       return emptyText;
     default:
@@ -59,15 +59,22 @@ export class M3eFetchStatus extends LitElement {
     :host([variant='icon']) {
       display: contents;
     }
+    p {
+      margin: 0;
+    }
     .line {
       display: flex;
       align-items: center;
       gap: 4px;
       min-width: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .line .txt {
+      flex: 1;
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      font-variant-numeric: tabular-nums;
     }
     .line m3e-icon {
       --m3e-icon-size: 14px;
@@ -118,7 +125,12 @@ export class M3eFetchStatus extends LitElement {
       flex: none;
       cursor: pointer;
       border-radius: 999px;
+      touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
+      transition: transform var(--m3e-spatial-fast, 150ms);
+    }
+    button:active {
+      transform: scale(0.95);
     }
     button:focus-visible {
       outline: 2px solid currentColor;
@@ -136,16 +148,26 @@ export class M3eFetchStatus extends LitElement {
       --m3e-icon-size: 18px;
     }
     .icon-only {
+      position: relative;
       display: inline-grid;
       place-items: center;
       width: 28px;
       height: 28px;
       color: var(--acc-red);
     }
+    .icon-only::after {
+      content: '';
+      position: absolute;
+      inset: -8px;
+    }
     .icon-only m3e-icon {
       --m3e-icon-size: 18px;
     }
   `;
+
+  private stopPointer = (e: Event): void => {
+    e.stopPropagation();
+  };
 
   private retry(e: Event): void {
     // The card behind a compact status runs its own tap action otherwise.
@@ -159,7 +181,16 @@ export class M3eFetchStatus extends LitElement {
     if (this.variant === 'icon') {
       if (status !== 'error') return nothing;
       const label = `${this.subject}を取得できませんでした。もう一度試す`;
-      return html`<button class="icon-only" part="retry" aria-label=${label} title=${label} @click=${this.retry}>
+      return html`<button
+        type="button"
+        class="icon-only"
+        part="retry"
+        aria-label=${label}
+        title=${label}
+        @pointerdown=${this.stopPointer}
+        @pointerup=${this.stopPointer}
+        @click=${this.retry}
+      >
         <m3e-icon icon="cloud-off"></m3e-icon>
       </button>`;
     }
@@ -169,14 +200,14 @@ export class M3eFetchStatus extends LitElement {
         return nothing;
       case 'loading':
         return html`<p class="line" role="status">
-          <m3e-icon class="spin" icon="sync"></m3e-icon>${at ? `${at} 更新・更新中…` : '読み込み中…'}
+          <m3e-icon class="spin" icon="sync"></m3e-icon><span class="txt">${at ? `${at} 更新・更新中…` : '読み込み中…'}</span>
         </p>`;
       case 'ok':
-        return html`<p class="line">${at} 更新</p>`;
+        return at ? html`<p class="line"><span class="txt">${at} 更新</span></p>` : nothing;
       case 'empty':
         // No emptyText: the card says it itself, so only the time is left.
-        if (this.emptyText) return html`<p class="line">${this.emptyText}${at ? `（${at} 確認）` : ''}</p>`;
-        return html`<p class="line">${at} 更新</p>`;
+        if (this.emptyText) return html`<p class="line"><span class="txt">${this.emptyText}${at ? `（${at} 確認）` : ''}</span></p>`;
+        return at ? html`<p class="line"><span class="txt">${at} 更新</span></p>` : nothing;
       case 'error':
         return html`<div class="error" role="alert">
           <m3e-icon icon="error"></m3e-icon>
@@ -184,7 +215,16 @@ export class M3eFetchStatus extends LitElement {
             ${this.subject}を取得できませんでした
             ${hasData && at ? html`<small>${at} 時点のデータを表示しています</small>` : nothing}
           </p>
-          <button class="retry" part="retry" @click=${this.retry}><m3e-icon icon="sync"></m3e-icon>再試行</button>
+          <button
+            type="button"
+            class="retry"
+            part="retry"
+            @pointerdown=${this.stopPointer}
+            @pointerup=${this.stopPointer}
+            @click=${this.retry}
+          >
+            <m3e-icon icon="sync"></m3e-icon>再試行
+          </button>
         </div>`;
     }
   }

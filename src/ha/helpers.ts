@@ -31,7 +31,7 @@ const ON_STATES = new Set(['on', 'open', 'opening', 'unlocked', 'playing', 'home
 export function isActive(stateObj: HassEntity | undefined): boolean {
   if (!stateObj) return false;
   const domain = domainOf(stateObj.entity_id);
-  if (domain === 'climate') return stateObj.state !== 'off' && stateObj.state !== 'unavailable';
+  if (domain === 'climate') return stateObj.state !== 'off' && stateObj.state !== 'unavailable' && stateObj.state !== 'unknown';
   if (domain === 'lock') return stateObj.state === 'unlocked';
   return ON_STATES.has(stateObj.state);
 }
@@ -163,6 +163,11 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
       t = undefined;
       fn(...lastArgs);
     }
+  };
+  call.cancel = () => {
+    clearTimeout(t);
+    t = undefined;
+    lastArgs = undefined;
   };
   call.pending = () => t !== undefined;
   return call;

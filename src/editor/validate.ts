@@ -1,3 +1,5 @@
+import { ACCENTS } from '../theme/tokens';
+
 /**
  * Config checks shared by the cards. A card's static `validateConfig(config)`
  * returns Issues: `setConfig` throws on the first error (HA shows its error
@@ -83,7 +85,7 @@ export function checkEntity(
   required = false,
 ): Issue[] {
   const v = at(config, path);
-  if (v === undefined || v === '') return required ? [error(path, `${path} is required`, `${label}を選んでください`)] : [];
+  if (v === undefined || v === null || v === '') return required ? [error(path, `${path} is required`, `${label}を選んでください`)] : [];
   if (typeof v !== 'string' || !ENTITY_ID.test(v)) {
     return [error(path, `${path} must be an entity id like light.living`, `${label}は light.living のようなエンティティ ID にしてください（いまは ${JSON.stringify(v)}）`)];
   }
@@ -101,7 +103,7 @@ const ENTITY_ID = /^[a-z][a-z0-9_]*\.[a-z0-9_]+$/;
 /** An HA domain such as "light" or "binary_sensor" (missing is fine). */
 export function checkDomain(config: unknown, path: string, label: string): Issue[] {
   const v = at(config, path);
-  if (v === undefined) return [];
+  if (v === undefined || v === null || v === '') return [];
   if (typeof v === 'string' && DOMAIN.test(v)) return [];
   const hint =
     typeof v === 'string' && v.includes('.')
@@ -113,7 +115,7 @@ export function checkDomain(config: unknown, path: string, label: string): Issue
 /** "HH:MM" (24h). */
 export function checkTime(config: unknown, path: string, label: string): Issue[] {
   const v = at(config, path);
-  if (v === undefined || v === '') return [];
+  if (v === undefined || v === null || v === '') return [];
   const m = typeof v === 'string' ? /^(\d{1,2}):(\d{2})$/.exec(v) : null;
   if (m && Number(m[1]) < 24 && Number(m[2]) < 60) return [];
   return [error(path, `${path} must be a time like 08:30`, `${label}は 08:30 のように「時:分」で書いてください（いまは ${JSON.stringify(v)}）`)];
@@ -139,8 +141,13 @@ export function checkLevels(config: unknown, path = 'levels'): Issue[] {
   let prev = -Infinity;
   levels.forEach((l: Record<string, unknown> | undefined, i) => {
     const p = `${path}.${i}`;
-    if (!l || typeof l !== 'object' || !l.label) out.push(error(`${p}.label`, `${p}.label is required`, `値の段階 ${i + 1} に表示（label）を入れてください`));
-    const max = l?.max;
+    if (!l || typeof l !== 'object') {
+      out.push(error(`${p}.label`, `${p}.label is required`, `値の段階 ${i + 1} に表示（label）を入れてください`));
+      return;
+    }
+    if (!l.label) out.push(error(`${p}.label`, `${p}.label is required`, `値の段階 ${i + 1} に表示（label）を入れてください`));
+    out.push(...checkOneOf(config, `${p}.color`, ACCENTS, `値の段階 ${i + 1} の色`));
+    const max = l.max;
     if (max === undefined || max === null || max === '') {
       if (i < levels.length - 1) {
         out.push(warning(`${p}.max`, `${p}.max is missing: the levels after it are never used`, `値の段階 ${i + 1} に上限がないため、それより後の段階は使われません。上限を省けるのは最後の段階だけです`));

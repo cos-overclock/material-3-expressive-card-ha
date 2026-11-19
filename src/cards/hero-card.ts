@@ -41,6 +41,9 @@ export interface HeroCardConfig extends BaseCardConfig {
  * Motion: clock digits roll each minute; the 12-point weather cookie turns
  * slowly; changing conditions morph the glyph in on the fast spatial spring.
  */
+const tempLabel = (v: unknown) => (v == null || v === '' || Number.isNaN(Number(v)) ? '—' : `${Math.round(Number(v))}°`);
+const forecastDate = (dt: string) => (/^\d{4}-\d{2}-\d{2}$/.test(dt) ? new Date(`${dt}T00:00:00`) : new Date(dt));
+
 export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
   static override accentHint = '天気の表示の色を変えます。在宅のチップと週間予報のアイコンの色は変わりません。';
 
@@ -48,6 +51,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
   @state() private forecast: Forecast[] = [];
   private tick?: ReturnType<typeof setTimeout>;
   @state() private hourly: Forecast[] = [];
+  private forecastFor?: string;
   private forecasts = new ForecastSubscriptions((type, list) => {
     if (type === 'hourly') this.hourly = list;
     else this.forecast = list;
@@ -428,6 +432,11 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     super.willUpdate(changed);
     const layout = this.config?.layout ?? 'full';
     if (this.getAttribute('layout') !== layout) this.setAttribute('layout', layout);
+    if (this.forecastFor !== this.config?.weather) {
+      this.forecastFor = this.config?.weather;
+      this.forecast = [];
+      this.hourly = [];
+    }
   }
 
   override connectedCallback(): void {
@@ -464,7 +473,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
 
   protected override updated(changed: Map<PropertyKey, unknown>): void {
     super.updated(changed);
-    if (changed.has('hass') || changed.has('config')) this.subscribe();
+    if (changed.has('hass') || changed.has('config') || changed.has('now')) this.subscribe();
   }
 
   /** Daily for today's high / low (and the days row); hourly too when the row shows hours. */
@@ -505,7 +514,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     return html`<div class="weather" data-accent=${this.config.color ?? 'blue'} @click=${() => this.moreInfo(this.config.weather)}>
       <m3e-shape shape="cookie12" size="64" spin><m3e-icon .icon=${icon}></m3e-icon></m3e-shape>
       <div>
-        <div class="wtemp">${Math.round(Number(w.attributes.temperature))}°</div>
+        <div class="wtemp">${tempLabel(w.attributes.temperature)}</div>
         <div class="cond">${WEATHER_LABEL[w.state] ?? w.state}</div>
         ${parts.length ? html`<div class="detail">${parts.join('・')}</div>` : nothing}
       </div>
@@ -520,7 +529,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     return html`<div class="days">
       ${list.map((f) => {
         const [icon, accent] = WEATHER_ICON[f.condition ?? ''] ?? ['cloud', 'neutral'];
-        const t = new Date(f.datetime);
+        const t = forecastDate(f.datetime);
         return html`<div class="day">
           <span class="dow">${hourly ? `${t.getHours()}時` : WEEKDAY[t.getDay()]}</span>
           <m3e-icon .icon=${icon} data-accent=${accent}></m3e-icon>
@@ -537,7 +546,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     if (!w) return nothing;
     const [icon] = WEATHER_ICON[w.state] ?? ['cloud'];
     const cond = WEATHER_LABEL[w.state] ?? w.state;
-    const temp = Math.round(Number(w.attributes.temperature));
+    const temp = tempLabel(w.attributes.temperature);
     const today = this.forecast[0];
     const range =
       today?.temperature != null && today?.templow != null
@@ -551,7 +560,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
       data-accent=${this.config.color ?? 'blue'}
       role="button"
       tabindex="0"
-      aria-label=${`天気 ${cond} ${temp}°`}
+      aria-label=${`天気 ${cond} ${temp}`}
       @click=${open}
       @keydown=${(e: KeyboardEvent) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -562,7 +571,7 @@ export class M3eHeroCard extends M3eBaseCard<HeroCardConfig> {
     >
       <m3e-shape shape="cookie12" size=${size} spin><m3e-icon .icon=${icon}></m3e-icon></m3e-shape>
       <span class="w">
-        <span class="t">${temp}°</span>
+        <span class="t">${temp}</span>
         <span class="c">${cond}</span>
         ${range ? html`<span class="r">${range}</span>` : nothing}
       </span>

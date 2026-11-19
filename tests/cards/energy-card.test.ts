@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest';
 import '../../src/cards/energy-flow-card';
-import { $, mockHass, mount, quietWarnings, settle, text } from '../helpers/dom';
+import '../../src/cards/energy-sankey-card';
+import { $, deferred, mockHass, mount, quietWarnings, settle, text } from '../helpers/dom';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -44,5 +45,50 @@ describe('m3e-energy-flow-card', () => {
     expect(stats()).toHaveLength(2);
     expect((stats()[1][0] as { period: string }).period).toBe('day');
     expect(text(card)).toContain('今月の合計');
+  });
+
+  it('refetches on reconnect when disconnected mid-fetch', async () => {
+    const hass = mockHass([], { connection: {} as never });
+    const slow = deferred<unknown>();
+    hass.callWS.mockImplementation((msg: { type: string }) => {
+      if (msg.type === 'energy/get_prefs') return Promise.resolve(prefs);
+      return hass.callWS.mock.calls.filter(([m]) => (m as { type: string }).type !== 'energy/get_prefs').length === 1
+        ? slow.promise
+        : Promise.resolve({ 'sensor.grid_in': [{ start: Date.now(), change: 2.0 }] });
+    });
+    const card = await mount('m3e-energy-flow-card', {}, hass);
+    card.remove();
+    slow.resolve({});
+    await settle(card);
+    document.body.appendChild(card);
+    await settle(card);
+    expect($(card, '.flow')).not.toBeNull();
+  });
+});
+
+describe('m3e-energy-sankey-card', () => {
+  it('invalidates cache on config change and refetches after disconnect mid-fetch', async () => {
+    const hass = mockHass([], { connection: {} as never });
+    const slow = deferred<unknown>();
+    let statCalls = 0;
+    hass.callWS.mockImplementation((msg: { type: string }) => {
+      if (msg.type === 'energy/get_prefs') return Promise.resolve(prefs);
+      statCalls++;
+      if (statCalls === 1) return slow.promise;
+      return Promise.resolve({ 'sensor.grid_in': [{ start: Date.now(), change: 3.0 }], 'sensor.ac': [{ start: Date.now(), change: 1.0 }] });
+    });
+    const card = await mount('m3e-energy-sankey-card', { areas: [{ name: 'A', devices: ['sensor.ac'] }] }, hass);
+    card.remove();
+    slow.resolve({});
+    await settle(card);
+    document.body.appendChild(card);
+    await settle(card);
+    expect(statCalls).toBe(2);
+    expect(text(card)).toContain('A');
+
+    card.setConfig({ type: 'custom:m3e-energy-sankey-card', areas: [{ name: 'B', devices: ['sensor.ac'] }] });
+    await settle(card);
+    expect(statCalls).toBe(3);
+    expect(text(card)).toContain('B');
   });
 });

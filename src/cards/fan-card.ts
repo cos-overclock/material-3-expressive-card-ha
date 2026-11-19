@@ -84,9 +84,10 @@ export class M3eFanCard extends M3eBaseCard<FanCardConfig> {
   private clearPending?: ReturnType<typeof setTimeout>;
 
   private send = debounce((v: number) => {
-    if (this.isHumidifier) this.call('humidifier', 'set_humidity', { humidity: v }, this.config.entity);
-    else if (v === 0) this.call('fan', 'turn_off', {}, this.config.entity);
-    else this.call('fan', 'set_percentage', { percentage: v }, this.config.entity);
+    const rounded = Math.round(v);
+    if (this.isHumidifier) this.call('humidifier', 'set_humidity', { humidity: rounded }, this.config.entity);
+    else if (rounded <= 0) this.call('fan', 'turn_off', {}, this.config.entity);
+    else this.call('fan', 'set_percentage', { percentage: rounded }, this.config.entity);
     clearTimeout(this.clearPending);
     this.clearPending = setTimeout(() => (this.pending = undefined), 1500);
   }, 500);
@@ -172,7 +173,10 @@ export class M3eFanCard extends M3eBaseCard<FanCardConfig> {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.send.cancel();
     clearTimeout(this.clearPending);
+    this.clearPending = undefined;
+    this.pending = undefined;
   }
 
   private get isHumidifier(): boolean {

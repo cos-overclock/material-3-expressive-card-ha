@@ -66,7 +66,7 @@ function checkPeriods(c: Record<string, unknown>): Issue[] {
   const out: Issue[] = [];
   list.forEach((h, i) => {
     const n = typeof h === 'string' && h.trim() !== '' ? Number(h) : h;
-    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0 || n > 8760) {
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 1 || n > 8760) {
       out.push({
         path: `periods.${i}`,
         level: 'error',
@@ -85,13 +85,13 @@ function pastLabel(hours: number): string {
 
 /** The period buttons: the configured periods plus `hours`, numbers in range, sorted, no repeats. */
 export function periodOptions(config: Pick<SensorCardConfig, 'hours' | 'periods'>): number[] {
-  const list = [...(config.periods ?? DEFAULT_PERIODS), config.hours ?? 24].map(Number).filter((h) => Number.isFinite(h) && h > 0 && h <= 8760);
+  const list = [...(config.periods ?? DEFAULT_PERIODS), config.hours ?? 24].map(Number).filter((h) => Number.isFinite(h) && h >= 1 && h <= 8760);
   return [...new Set(list)].sort((a, b) => a - b);
 }
 
-/** Chart buckets: half-hours for a day, two-hour steps for a week, about 90 beyond. */
+/** Chart buckets: at least 48 so 2d / 3d don't drop below 24h's resolution, two-hour steps beyond 4d, ~90 beyond a week. */
 function samplesFor(hours: number): number {
-  return hours <= 24 ? 48 : hours <= 168 ? Math.round(hours / 2) : 90;
+  return hours <= 24 ? 48 : hours <= 168 ? Math.max(48, Math.round(hours / 2)) : 90;
 }
 const REFRESH_MS = 10 * 60_000;
 
@@ -431,6 +431,7 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
   override connectedCallback(): void {
     super.connectedCallback();
     this.startRefresh();
+    this.loadHistory(false);
   }
 
   protected override visibilityChanged(visible: boolean): void {
@@ -538,12 +539,16 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
       const pos = (t - start) / (end - start);
       if (pos <= 0.86) labels.push({ pos, text });
     };
-    if (hours > 48) {
-      // Days: a label at midnight every few days.
+    if (hours > 24) {
+      // Multi-day: a label at midnight (every few days for longer spans).
       const stepD = Math.max(1, Math.round(hours / 24 / 4));
       const d = new Date(start);
       d.setHours(24, 0, 0, 0);
       for (; d.getTime() < end; d.setDate(d.getDate() + stepD)) push(d.getTime(), `${d.getMonth() + 1}/${d.getDate()}`);
+    } else if (hours <= 2) {
+      const stepMs = (hours <= 1 ? 15 : 30) * 60_000;
+      const first = Math.ceil(start / stepMs) * stepMs;
+      for (let t = first; t < end; t += stepMs) push(t, hhmm(t));
     } else {
       const stepH = Math.max(1, Math.round(hours / 4));
       const first = new Date(start);
@@ -560,6 +565,8 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
     const { values, start, end } = this.series(s);
     const name = this.config.name ?? (s?.attributes.friendly_name as string) ?? this.config.entity;
     const nums = values.filter((v): v is number => v !== null);
+    const inWindow = this.history.filter(([t]) => t >= start && t <= end).map(([, v]) => v);
+    const extrema = inWindow.length ? [...nums, ...inWindow] : nums;
     const scrubbing = this.scrubIndex !== null && values[this.scrubIndex] != null;
     const shown = scrubbing ? values[this.scrubIndex!] : numState(s);
     const at = scrubbing ? start + ((this.scrubIndex! + 0.5) / values.length) * (end - start) : 0;
@@ -605,8 +612,8 @@ export class M3eSensorCard extends M3eBaseCard<SensorCardConfig> {
       ${this.config.show_stats === false || !nums.length || !this.history.length
         ? nothing
         : html`<div class="stats">
-            <div class="stat hi"><p class="k">最高</p><p class="v">${this.fmt(Math.max(...nums), s)}${short}</p></div>
-            <div class="stat lo"><p class="k">最低</p><p class="v">${this.fmt(Math.min(...nums), s)}${short}</p></div>
+            <div class="stat hi"><p class="k">最高</p><p class="v">${this.fmt(Math.max(...extrema), s)}${short}</p></div>
+            <div class="stat lo"><p class="k">最低</p><p class="v">${this.fmt(Math.min(...extrema), s)}${short}</p></div>
             <div class="stat"><p class="k">平均</p><p class="v">${this.fmt(nums.reduce((a, b) => a + b, 0) / nums.length, s)}${short}</p></div>
           </div>`}
     </div>`;

@@ -45,15 +45,24 @@ describe('config checks', () => {
     expect(isDate('2026/12/31')).toBe(false);
   });
 
-  it('levels: labels, numeric bounds, order, and a missing bound before the last', () => {
-    expect(checkLevels({ levels: [{ max: 1000, label: '良好' }, { label: '換気を' }] })).toEqual([]);
+  it('treats null and empty values from cleared form fields as unset', () => {
+    expect(checkEntity({ entity: null }, 'entity', ['lock'], '鍵')).toEqual([]);
+    expect(checkEntity({ entity: null }, 'entity', ['lock'], '鍵', true)).toHaveLength(1);
+    expect(checkDomain({ domain: null }, 'domain', 'ドメイン')).toEqual([]);
+    expect(checkDomain({ domain: '' }, 'domain', 'ドメイン')).toEqual([]);
+    expect(checkTime({ t: null }, 't', '時刻')).toEqual([]);
+  });
+
+  it('levels: labels, numeric bounds, colors, order, and malformed entries', () => {
+    expect(checkLevels({ levels: [{ max: 1000, label: '良好', color: 'green' }, { label: '換気を' }] })).toEqual([]);
     expect(
       paths(
         checkLevels({
-          levels: [{ max: 25, label: '快適' }, { label: '暑い' }, { max: 20, label: '寒い' }, { max: 'x', label: 'y' }, { max: 30 }],
+          levels: [{ max: 25, label: '快適' }, { label: '暑い' }, { max: 20, label: '寒い' }, { max: 'x', label: 'y', color: 'neon' }, { max: 30 }],
         }),
       ),
-    ).toEqual(['warning:levels.1.max', 'warning:levels.2.max', 'error:levels.3.max', 'error:levels.4.label']);
+    ).toEqual(['warning:levels.1.max', 'warning:levels.2.max', 'error:levels.3.color', 'error:levels.3.max', 'error:levels.4.label']);
+    expect(paths(checkLevels({ levels: [null] }))).toEqual(['error:levels.0.label']);
   });
 
   it('summaries: type, domain, decimals and what each type needs', () => {

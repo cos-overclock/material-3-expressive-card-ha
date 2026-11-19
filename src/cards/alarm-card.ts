@@ -313,7 +313,7 @@ export class M3eAlarmCard extends M3eBaseCard<AlarmCardConfig> {
 
   private async send(service: Service, code?: string): Promise<void> {
     try {
-      await this.hass?.callService('alarm_control_panel', `alarm_${service}`, code ? { code } : {}, { entity_id: this.config.entity });
+      await this.call('alarm_control_panel', `alarm_${service}`, code ? { code } : {}, this.config.entity);
       fireHaptic(this, 'success');
       this.pending = undefined;
       this.keypad?.clear();

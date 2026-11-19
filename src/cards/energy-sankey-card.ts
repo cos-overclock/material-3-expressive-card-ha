@@ -163,8 +163,9 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
   private morph = new SpringValue(1, SPRINGS.spatialDefault, (t) => {
     if (this.from && this.to) this.shown = mix(this.from, this.to, t);
   });
-  private cache = new Map<string, { at: number; model: Model }>();
+  private cache = new Map<string, { at: number; model: Model; empty: boolean }>();
   private ro?: ResizeObserver;
+  private lastConfigKey?: string;
   /** When each period was last asked for; a failure waits REFRESH_MS (or the retry button) before asking again. */
   private attempted = new Map<Kind, number>();
   private readonly fetch = new FetchTracker<Model>(this, {
@@ -339,14 +340,28 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
   }
 
   override disconnectedCallback(): void {
+    if (this.fetch.status === 'loading' && this.fetch.key) this.attempted.delete(this.fetch.key as Kind);
     super.disconnectedCallback();
     this.ro?.disconnect();
     this.morph.stop();
   }
 
+  private configKey(): string {
+    const c = this.config;
+    return JSON.stringify([c.sources, c.areas, c.names, c.max_devices]);
+  }
+
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
     if (!this.hass) return;
+    const cfgKey = this.configKey();
+    if (cfgKey !== this.lastConfigKey) {
+      this.lastConfigKey = cfgKey;
+      this.cache.clear();
+      this.attempted.clear();
+      this.shown = undefined;
+      this.fetch.reset();
+    }
     const last = this.attempted.get(this.period);
     if ((last === undefined || Date.now() - last > REFRESH_MS) && !this.fetch.isLoading(this.period)) this.load(this.period);
   }
@@ -361,20 +376,21 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
 
   private async load(kind: Kind): Promise<void> {
     const hass = this.hass;
-    if (!hass) return;
+    const config = this.config;
+    if (!hass || !config) return;
     this.attempted.set(kind, Date.now());
-    const applied = await this.fetch.run(kind, () => this.fetchModel(hass, kind), (model) => {
-      this.cache.set(kind, { at: Date.now(), model });
+    const applied = await this.fetch.run(kind, () => this.fetchModel(hass, config, kind), (model) => {
+      this.cache.set(kind, { at: Date.now(), model, empty: model.home <= 0 && !model.sources.length });
       if (kind === this.period) this.show(kind);
     });
-    // Overtaken by a fetch of another period: ask again when this one is shown.
-    if (!applied && this.fetch.key !== kind) this.attempted.delete(kind);
+    // Overtaken by another period or aborted by disconnect: ask again when shown next.
+    if (!applied && (this.fetch.key !== kind || this.fetch.status === 'idle')) this.attempted.delete(kind);
   }
 
-  private async fetchModel(hass: HomeAssistant, kind: Kind): Promise<Model> {
-    const src = await loadSources(hass, { ...this.config.sources });
+  private async fetchModel(hass: HomeAssistant, config: EnergySankeyCardConfig, kind: Kind): Promise<Model> {
+    const src = await loadSources(hass, { ...config.sources });
     const { start, end, period, buckets } = range(kind);
-    const deviceIds = this.config.areas ? this.config.areas.flatMap((a) => a.devices) : src.devices.map((d) => d.stat);
+    const deviceIds = config.areas ? config.areas.flatMap((a) => a.devices) : src.devices.map((d) => d.stat);
     const ids = [...new Set([...src.grid_in, ...src.grid_out, ...src.solar, ...src.battery_in, ...src.battery_out, ...deviceIds])];
     const data = await statChanges(hass, ids, start, end, period, buckets);
     const total = (list: string[]) => sum(addSeries(data, list, buckets));
@@ -393,36 +409,38 @@ export class M3eEnergySankeyCard extends M3eBaseCard<EnergySankeyCardConfig> {
       { key: 'battery', label: '蓄電池', color: accentVar('green'), value: f.batteryToHome },
       { key: 'grid', label: '電力会社', color: accentVar('blue'), value: f.gridToHome },
     ].filter((s) => s.value > 0.005);
-    return { sources, home, areas: this.groupAreas(data, deviceIds, src.devices, home) };
+    return { sources, home, areas: this.groupAreas(hass, config, data, deviceIds, src.devices, home) };
   }
 
   /** The status of the period on screen: its fetch, or when its cached data arrived. */
   private statusView(): FetchView {
     if (this.fetch.key === this.period) return this.fetch.view;
     const cached = this.cache.get(this.period);
-    return cached ? { status: 'ok', updatedAt: cached.at, hasData: true } : { status: 'idle', hasData: false };
+    return cached ? { status: cached.empty ? 'empty' : 'ok', updatedAt: cached.at, hasData: true } : { status: 'idle', hasData: false };
   }
 
   private groupAreas(
+    hass: HomeAssistant,
+    config: EnergySankeyCardConfig,
     data: Record<string, number[]>,
     deviceIds: string[],
     named: { stat: string; name?: string }[],
     home: number,
   ): Model['areas'] {
     const nameOf = (id: string) =>
-      this.config.names?.[id] ?? named.find((d) => d.stat === id)?.name ?? (this.hass!.states[id]?.attributes.friendly_name as string) ?? id;
+      config.names?.[id] ?? named.find((d) => d.stat === id)?.name ?? (hass.states[id]?.attributes.friendly_name as string) ?? id;
     const groups: { key: string; label: string; color?: Accent; ids: string[] }[] = [];
-    if (this.config.areas) {
-      this.config.areas.forEach((a, i) => groups.push({ key: `cfg${i}`, label: a.name, color: a.color, ids: a.devices }));
+    if (config.areas) {
+      config.areas.forEach((a, i) => groups.push({ key: `cfg${i}`, label: a.name, color: a.color, ids: a.devices }));
     } else {
       for (const id of deviceIds) {
-        const area = areaName(this.hass, id) ?? OTHER;
+        const area = areaName(hass, id) ?? OTHER;
         let g = groups.find((x) => x.key === area);
         if (!g) groups.push((g = { key: area, label: area === OTHER ? 'その他' : area, ids: [] }));
         g.ids.push(id);
       }
     }
-    const max = this.config.max_devices ?? 4;
+    const max = config.max_devices ?? 4;
     let areas = groups.map((g) => {
       const devs = g.ids.map((id) => ({ key: id, label: nameOf(id), value: sum(data[id] ?? []) })).filter((d) => d.value > 0.005);
       devs.sort((a, b) => b.value - a.value);

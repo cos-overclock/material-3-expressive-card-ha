@@ -27,6 +27,11 @@ function themeDensity(el: Element): string {
   return (el.isConnected ? read(el) : '') || read(document.documentElement);
 }
 
+function hasStates(states: Record<string, unknown> | undefined): boolean {
+  for (const _ in states) return true;
+  return false;
+}
+
 export interface BaseCardConfig extends LovelaceCardConfig {
   /** Spacing and type size. Default auto: compact on phones and tablets. */
   density?: Density;
@@ -70,7 +75,7 @@ export function baseIssues(config: Record<string, unknown>): Issue[] {
   ];
   for (const key of ['tap_action', 'hold_action', 'double_tap_action'] as const) {
     const a = config[key];
-    if (a !== undefined && (typeof a !== 'object' || !a || typeof (a as ActionConfig).action !== 'string')) {
+    if (a !== undefined && a !== null && (typeof a !== 'object' || typeof (a as ActionConfig).action !== 'string')) {
       out.push({ path: key, level: 'error', message: `${key} must look like { action: more-info }`, hint: `${ACTION_LABELS[key]}の動作は { action: more-info } の形で書いてください` });
     }
   }
@@ -326,9 +331,14 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     // A theme switch may change --m3e-density.
     if (prev.themes?.theme !== this.hass.themes?.theme) this.syncDensity();
     if (prev.themes?.darkMode !== this.hass.themes?.darkMode) return true;
-    // The configured entity appeared or went away: swap between the card and the warning.
+    // The configured entity appeared, went away, or initial states loaded without it.
     const id = this.config.entity;
-    if (typeof id === 'string' && !prev.states[id] !== !this.hass.states[id]) return true;
+    if (
+      typeof id === 'string' &&
+      (!prev.states[id] !== !this.hass.states[id] || (!this.hass.states[id] && !hasStates(prev.states) && hasStates(this.hass.states)))
+    ) {
+      return true;
+    }
     return this.watchedEntities().some((id) => prev.states[id] !== this.hass!.states[id]);
   }
 
@@ -349,9 +359,8 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     if (typeof id !== 'string' || !id || !this.hass) return undefined;
     // Before HA has sent any state, "missing" only means "not loaded yet".
     const states = this.hass.states;
-    if (states[id]) return undefined;
-    for (const _ in states) return id;
-    return undefined;
+    if (states[id] || !hasStates(states)) return undefined;
+    return id;
   }
 
   protected override render() {
@@ -394,11 +403,11 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
   protected runAction(action: ActionConfig | ActionType | undefined, entityId: string | undefined): void {
     const cfg: ActionConfig | undefined = typeof action === 'string' ? { action } : action;
     if (!cfg || cfg.action === 'none' || !this.hass) return;
+    const target = cfg.entity ?? entityId;
     if (cfg.confirmation || !LOCAL_ACTIONS.has(cfg.action)) {
-      fireAction(this, cfg, entityId);
+      fireAction(this, cfg, target);
       return;
     }
-    const target = cfg.entity ?? entityId;
     if (!target) return;
     if (cfg.action === 'more-info') {
       fireMoreInfo(this, target);
@@ -406,7 +415,7 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
       const s = this.stateObj(target);
       if (!s) return;
       fireHaptic(this, 'light');
-      toggleEntity(this.hass, s);
+      toggleEntity(this.hass, s).catch((e) => console.warn(`${this.localName}: toggle failed`, e));
     }
   }
 
@@ -420,8 +429,11 @@ export abstract class M3eBaseCard<C extends BaseCardConfig = BaseCardConfig> ext
     this.runAction(this.actionFor(kind, fallback), this.config.entity as string | undefined);
   }
 
-  /** PressGesture's double-tap hook: a handler only when a double_tap_action is set. */
-  protected readonly doubleTap = () => (this.config?.double_tap_action ? () => this.handleAction('double_tap', 'none') : undefined);
+  /** PressGesture's double-tap hook: a handler only when an active double_tap_action is set. */
+  protected readonly doubleTap = () =>
+    this.config?.double_tap_action && this.config.double_tap_action.action !== 'none'
+      ? () => this.handleAction('double_tap', 'none')
+      : undefined;
 
   /**
    * A tap on a card's header (icon and name): the card's `tap_action` when one is
@@ -453,6 +465,8 @@ export class PressGesture {
   private timer?: ReturnType<typeof setTimeout>;
   private tapTimer?: ReturnType<typeof setTimeout>;
   private held = false;
+  private pendingDouble = false;
+  private pointerId?: number;
   private start: [number, number] = [0, 0];
 
   constructor(
@@ -460,17 +474,42 @@ export class PressGesture {
     private readonly onTap: () => void,
     private readonly onHold?: () => void,
     private readonly doubleTap?: () => (() => void) | undefined,
-  ) {}
+  ) {
+    host.addController(this);
+  }
+
+  hostConnected(): void {}
+
+  hostDisconnected(): void {
+    clearTimeout(this.timer);
+    clearTimeout(this.tapTimer);
+    this.timer = undefined;
+    this.tapTimer = undefined;
+    this.pendingDouble = false;
+    this.held = false;
+    this.pointerId = undefined;
+    this.pressed = false;
+  }
 
   readonly handlers = {
     pointerdown: (e: PointerEvent) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || (this.pressed && this.pointerId !== undefined && e.pointerId !== this.pointerId)) return;
+      clearTimeout(this.timer);
+      this.timer = undefined;
+      if (this.tapTimer) {
+        clearTimeout(this.tapTimer);
+        this.tapTimer = undefined;
+        this.pendingDouble = true;
+      }
+      this.pointerId = e.pointerId;
       this.pressed = true;
       this.held = false;
       this.start = [e.clientX, e.clientY];
       this.host.requestUpdate();
       if (this.onHold) {
         this.timer = setTimeout(() => {
+          this.timer = undefined;
+          this.pendingDouble = false;
           this.held = true;
           this.pressed = false;
           this.host.requestUpdate();
@@ -479,18 +518,25 @@ export class PressGesture {
       }
     },
     pointermove: (e: PointerEvent) => {
-      if (!this.pressed) return;
+      if (!this.pressed || (this.pointerId !== undefined && e.pointerId !== this.pointerId)) return;
       if (Math.hypot(e.clientX - this.start[0], e.clientY - this.start[1]) > 10) this.cancel();
     },
-    pointerup: () => {
+    pointerup: (e: PointerEvent) => {
+      if (this.pointerId !== undefined && e.pointerId !== this.pointerId) return;
       clearTimeout(this.timer);
+      this.timer = undefined;
+      this.pointerId = undefined;
       const fire = this.pressed && !this.held;
       this.pressed = false;
       this.host.requestUpdate();
       if (fire) this.tap();
     },
-    pointerleave: () => this.cancel(),
-    pointercancel: () => this.cancel(),
+    pointerleave: (e: PointerEvent) => {
+      if (this.pointerId === undefined || e.pointerId === this.pointerId) this.cancel();
+    },
+    pointercancel: (e: PointerEvent) => {
+      if (this.pointerId === undefined || e.pointerId === this.pointerId) this.cancel();
+    },
     keydown: (e: KeyboardEvent) => {
       // Ignore keys bubbling up from nested controls (switch, slider…).
       if (e.target !== e.currentTarget) return;
@@ -508,10 +554,12 @@ export class PressGesture {
   private tap(): void {
     const second = this.doubleTap?.();
     if (!second) {
+      this.pendingDouble = false;
       this.onTap();
       return;
     }
-    if (this.tapTimer) {
+    if (this.pendingDouble || this.tapTimer) {
+      this.pendingDouble = false;
       clearTimeout(this.tapTimer);
       this.tapTimer = undefined;
       second();
@@ -531,6 +579,9 @@ export class PressGesture {
 
   private cancel(): void {
     clearTimeout(this.timer);
+    this.timer = undefined;
+    this.pendingDouble = false;
+    this.pointerId = undefined;
     if (this.pressed) {
       this.pressed = false;
       this.host.requestUpdate();

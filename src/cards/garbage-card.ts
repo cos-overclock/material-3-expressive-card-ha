@@ -1,13 +1,13 @@
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { state } from 'lit/decorators.js';
 import { M3eBaseCard, type BaseCardConfig } from './base-card';
-import { checkEntity, checkNumber, checkTime, isDate, type Issue } from '../editor/validate';
+import { checkEntity, checkNumber, checkOneOf, checkTime, isDate, type Issue } from '../editor/validate';
 import { field, listOf } from '../editor/form-helpers';
 import { isActive } from '../ha/helpers';
 import { DAYS, ruleHits, ymd, type Rule } from '../ha/garbage-rules';
 import { FetchTracker } from '../ha/fetch-state';
 import type { LovelaceGridOptions } from '../ha/types';
-import type { Accent } from '../theme/tokens';
+import { ACCENTS, type Accent } from '../theme/tokens';
 import { define } from '../components/define';
 import '../components/m3e-shape';
 import '../components/m3e-icon';
@@ -279,29 +279,71 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
   }
 
   static override validateConfig(c: Record<string, unknown>): Issue[] {
-    return [
+    const out: Issue[] = [
       ...checkEntity(c, 'calendar', ['calendar'], 'カレンダー'),
+      ...checkEntity(c, 'done_entity', undefined, '「出した」を記録するエンティティ'),
       ...checkTime(c, 'deadline', '締め切り時刻'),
       ...checkNumber(c, 'upcoming', { min: 0, max: 20, integer: true, label: 'その先の予定の件数' }),
-      ...((c.schedule as Record<string, unknown>[] | undefined) ?? []).flatMap((r, i): Issue[] => [
-        ...((r?.weeks as unknown[] | undefined) ?? [])
-          .filter((w) => !(Number.isInteger(Number(w)) && Number(w) >= 1 && Number(w) <= 5))
-          .map((w) => ({
-            path: `schedule.${i}.weeks`,
-            level: 'error' as const,
-            message: `schedule.${i}.weeks: ${w} must be 1 to 5`,
-            hint: `収集日 ${i + 1} の「第何週」は 1〜5 にしてください（いまは ${JSON.stringify(w)}）`,
-          })),
-        ...((r?.dates as unknown[] | undefined) ?? [])
-          .filter((d) => !isDate(d))
-          .map((d) => ({
-            path: `schedule.${i}.dates`,
-            level: 'error' as const,
-            message: `schedule.${i}.dates: ${d} must be a date like 2026-12-31`,
-            hint: `収集日 ${i + 1} の日付は 2026-12-31 のように書いてください（いまは ${JSON.stringify(d)}）`,
-          })),
-      ]),
     ];
+    if (c.schedule !== undefined && !Array.isArray(c.schedule)) {
+      out.push({ path: 'schedule', level: 'error', message: 'schedule must be a list', hint: '収集日はリストで書いてください' });
+    } else if (Array.isArray(c.schedule)) {
+      c.schedule.forEach((r: unknown, i) => {
+        if (!r || typeof r !== 'object') {
+          out.push({ path: `schedule.${i}`, level: 'error', message: `schedule.${i} must be an object`, hint: `収集日 ${i + 1} の設定が正しくありません` });
+          return;
+        }
+        const rule = r as Record<string, unknown>;
+        if (!rule.type || typeof rule.type !== 'string') {
+          out.push({ path: `schedule.${i}.type`, level: 'error', message: 'schedule: every rule needs a type', hint: `収集日 ${i + 1} の種類を入力してください` });
+        }
+        if (rule.days !== undefined) {
+          if (!Array.isArray(rule.days)) {
+            out.push({ path: `schedule.${i}.days`, level: 'error', message: `schedule.${i}.days must be a list`, hint: `収集日 ${i + 1} の曜日はリストで書いてください` });
+          } else if (rule.days.some((d) => typeof d !== 'string' || !DAYS.includes(d as (typeof DAYS)[number]))) {
+            out.push({ path: `schedule.${i}.days`, level: 'error', message: `schedule: days are ${DAYS.join(', ')}`, hint: `収集日 ${i + 1} の曜日は ${DAYS.join('・')} から選んでください` });
+          }
+        }
+        if (rule.weeks !== undefined) {
+          if (!Array.isArray(rule.weeks)) {
+            out.push({ path: `schedule.${i}.weeks`, level: 'error', message: `schedule.${i}.weeks must be a list`, hint: `収集日 ${i + 1} の「第何週」はリストで書いてください` });
+          } else {
+            for (const w of rule.weeks) {
+              const ok = (typeof w === 'number' || (typeof w === 'string' && w.trim() !== '')) && Number.isInteger(Number(w)) && Number(w) >= 1 && Number(w) <= 5;
+              if (!ok) {
+                out.push({
+                  path: `schedule.${i}.weeks`,
+                  level: 'error',
+                  message: `schedule.${i}.weeks: ${w} must be 1 to 5`,
+                  hint: `収集日 ${i + 1} の「第何週」は 1〜5 にしてください（いまは ${JSON.stringify(w)}）`,
+                });
+              }
+            }
+          }
+        }
+        if (rule.dates !== undefined) {
+          if (!Array.isArray(rule.dates)) {
+            out.push({ path: `schedule.${i}.dates`, level: 'error', message: `schedule.${i}.dates must be a list`, hint: `収集日 ${i + 1} の日付はリストで書いてください` });
+          } else {
+            for (const d of rule.dates) {
+              if (!isDate(d)) {
+                out.push({
+                  path: `schedule.${i}.dates`,
+                  level: 'error',
+                  message: `schedule.${i}.dates: ${d} must be a date like 2026-12-31`,
+                  hint: `収集日 ${i + 1} の日付は 2026-12-31 のように書いてください（いまは ${JSON.stringify(d)}）`,
+                });
+              }
+            }
+          }
+        }
+        out.push(...checkOneOf(c, `schedule.${i}.color`, ACCENTS, `収集日 ${i + 1} の色`));
+      });
+    }
+    if ((!Array.isArray(c.schedule) || !c.schedule.length) && !c.calendar) {
+      out.push({ path: 'schedule', level: 'error', message: 'schedule or calendar is required', hint: '収集日かカレンダーのどちらかを指定してください' });
+    }
+    return out;
   }
 
   protected normalizeConfig(config: GarbageCardConfig): GarbageCardConfig {
@@ -462,7 +504,7 @@ export class M3eGarbageCard extends M3eBaseCard<GarbageCardConfig> {
         </div>
       </div>
       ${next
-        ? html`<div class="next ${done ? 'done' : ''}">
+        ? html`<div class="next ${done ? 'done' : ''}" data-accent=${this.colorOf(next.types[0])}>
             <div class="text">
               <p class="when">${this.dateLabel(next.date, true)}</p>
               <p class="type">${done ? html`<m3e-icon icon="check-circle"></m3e-icon>` : nothing}${next.types.join('・')}</p>

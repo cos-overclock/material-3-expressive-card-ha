@@ -27,6 +27,7 @@ export interface WeatherCardConfig extends BaseCardConfig {
 }
 
 const round = (v: unknown) => (v == null || Number.isNaN(Number(v)) ? '—' : `${Math.round(Number(v))}°`);
+const forecastDate = (dt: string) => (/^\d{4}-\d{2}-\d{2}$/.test(dt) ? new Date(`${dt}T00:00:00`) : new Date(dt));
 
 /**
  * Weather in depth: the current conditions (temperature, condition, feels
@@ -251,6 +252,11 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
     return 7;
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this.config) this.forecasts.sync(this.hass, this.config.entity, this.forecastTypes());
+  }
+
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.forecasts.stop();
@@ -300,21 +306,21 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
   private renderDays() {
     const list = this.daily.slice(0, this.config.days ?? 5);
     if (!list.length) return nothing;
-    const lows = list.map((f) => Number(f.templow ?? f.temperature));
-    const highs = list.map((f) => Number(f.temperature));
-    const min = Math.min(...lows.filter(Number.isFinite));
-    const max = Math.max(...highs.filter(Number.isFinite));
+    const lows = list.map((f) => Number(f.templow ?? f.temperature)).filter(Number.isFinite);
+    const highs = list.map((f) => Number(f.temperature)).filter(Number.isFinite);
+    const min = lows.length ? Math.min(...lows) : 0;
+    const max = highs.length ? Math.max(...highs) : 1;
     const span = max - min || 1;
     const today = new Date(this.clockNow).toDateString();
     return html`<div class="days" role="list" aria-label="日ごとの予報">
       ${list.map((f) => {
         const [icon, accent] = WEATHER_ICON[f.condition ?? ''] ?? ['cloud', 'neutral'];
-        const d = new Date(f.datetime);
+        const d = forecastDate(f.datetime);
         const label = d.toDateString() === today ? '今日' : WEEKDAY[d.getDay()];
         const lo = Number(f.templow ?? f.temperature);
         const hi = Number(f.temperature);
-        const left = Number.isFinite(lo) ? ((lo - min) / span) * 100 : 0;
-        const width = Number.isFinite(lo) && Number.isFinite(hi) ? Math.max(4, ((hi - lo) / span) * 100) : 0;
+        const width = Number.isFinite(lo) && Number.isFinite(hi) ? Math.min(100, Math.max(4, ((hi - lo) / span) * 100)) : 0;
+        const left = Number.isFinite(lo) ? Math.min(100 - width, Math.max(0, ((lo - min) / span) * 100)) : 0;
         return html`<div class="day" role="listitem">
           <span>${label}</span>
           <m3e-icon .icon=${icon} data-accent=${accent} aria-label=${WEATHER_LABEL[f.condition ?? ''] ?? ''}></m3e-icon>
@@ -357,11 +363,12 @@ export class M3eWeatherCard extends M3eBaseCard<WeatherCardConfig> {
       ${showHourly || showDaily
         ? html`<m3e-fetch-status
             .view=${{
-              status: this.forecasts.status,
+              status: this.forecasts.status === 'ok' && this.hourly.length + this.daily.length === 0 ? 'empty' : this.forecasts.status,
               updatedAt: this.forecasts.updatedAt,
               hasData: this.hourly.length + this.daily.length > 0,
             }}
             subject="予報"
+            emptyText="予報データがありません"
             @retry=${this.retry}
           ></m3e-fetch-status>`
         : nothing}

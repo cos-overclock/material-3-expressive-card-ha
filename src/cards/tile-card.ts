@@ -226,7 +226,7 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
   private tap(): void {
     const action = this.actionFor('tap', 'toggle');
     this.runAction(action, this.config.entity);
-    if (action.action === 'toggle' && this.isPress() && this.stateObj(this.config.entity)?.state !== 'unavailable') {
+    if (action.action === 'toggle' && !action.confirmation && this.isPress() && this.stateObj(this.config.entity)?.state !== 'unavailable') {
       clearTimeout(this.flashTimer);
       this.flash = true;
       this.flashTimer = setTimeout(() => (this.flash = false), FLASH_MS);
@@ -279,7 +279,7 @@ export class M3eTileCard extends M3eBaseCard<TileCardConfig> {
       .checked=${on}
       ?disabled=${isUnavailable(s)}
       label=${name}
-      @change=${() => s && this.hass && toggleEntity(this.hass, s)}
+      @change=${() => s && this.hass && toggleEntity(this.hass, s).catch((e) => console.warn(`${this.localName}: toggle failed`, e))}
     ></m3e-switch>`;
     const mode = this.mode();
     if (mode !== 'tile') {

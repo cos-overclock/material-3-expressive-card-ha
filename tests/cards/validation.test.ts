@@ -26,6 +26,10 @@ describe('setConfig refuses misconfigured cards', () => {
     ['m3e-heading-card', { title: 'x', summary: { type: 'average' } }, 'summary: an average needs entities'],
     ['m3e-energy-flow-card', { period: 'year' }, 'period must be one of: day, week, month'],
     ['m3e-tile-card', { entity: 'light.a', density: 'tiny' }, 'density must be one of: auto, compact, comfortable'],
+    ['m3e-sensor-card', { entity: 'sensor.t', periods: [6, 0.5] }, 'periods.1 must be a number of hours from 1 to 8760'],
+    ['m3e-garbage-card', { schedule: [{ type: 'びん', days: ['thu'], weeks: [true] }] }, 'schedule.0.weeks: true must be 1 to 5'],
+    ['m3e-agenda-card', { calendars: 'calendar.home' }, 'calendars must be a list'],
+    ['m3e-badges-card', { badges: 'sensor.a' }, 'badges: list at least one badge'],
   ])('%s %j', (tag, config, message) => {
     expect(() => card(tag).setConfig({ type: `custom:${tag}`, ...config })).toThrow(message);
   });
@@ -51,5 +55,16 @@ describe('the editor lists the issues while editing', () => {
     editor.setConfig({ type: 'custom:m3e-sensor-card', entity: 'sensor.t', hours: 24 });
     await settle(editor);
     expect($$(editor, '.issue')).toEqual([]);
+  });
+
+  it('lists errors for non-array YAML lists instead of hiding all issues', async () => {
+    const editor = (customElements.get('m3e-agenda-card') as CardClass).getConfigElement();
+    (editor as unknown as { hass: unknown }).hass = mockHass([]);
+    document.body.appendChild(editor);
+    editor.setConfig({ type: 'custom:m3e-agenda-card', calendars: 'calendar.home', days: 0 });
+    await settle(editor);
+    const items = $$(editor, '.issue');
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    expect(text(items[0])).toContain('カレンダーはリストで書いてください');
   });
 });

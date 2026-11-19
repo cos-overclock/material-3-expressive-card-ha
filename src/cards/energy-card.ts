@@ -88,6 +88,8 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
   });
   /** idle → growing (zero height) → grown (staggered transition) → settled. */
   @state() private growth: 'idle' | 'growing' | 'grown' | 'settled' = 'idle';
+  private growthRaf = 0;
+  private growthTimer?: ReturnType<typeof setTimeout>;
 
   static override styles = [
     M3eBaseCard.styles,
@@ -451,17 +453,27 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
     };
   }
 
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    cancelAnimationFrame(this.growthRaf);
+    this.growthRaf = 0;
+    clearTimeout(this.growthTimer);
+    this.growthTimer = undefined;
+  }
+
   protected override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
     // First data: render at zero height, then let the bars grow on the next frame.
     if (this.hourly && this.growth === 'idle') {
       this.growth = 'growing';
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
+      this.growthRaf = requestAnimationFrame(() => {
+        this.growthRaf = requestAnimationFrame(() => {
+          this.growthRaf = 0;
           this.growth = 'grown';
-          setTimeout(() => (this.growth = 'settled'), 1200);
-        }),
-      );
+          clearTimeout(this.growthTimer);
+          this.growthTimer = setTimeout(() => (this.growth = 'settled'), 1200);
+        });
+      });
     }
   }
 
@@ -505,7 +517,7 @@ export class M3eEnergyCard extends M3eBaseCard<EnergyCardConfig> {
     const tick = niceTick(Math.max(maxUp, maxDown));
     const top = Math.max(maxUp, tick) * 1.04;
     const bottom = maxDown > 0 ? Math.max(maxDown, tick) * 1.04 : 0;
-    const H = 180;
+    const H = this.compact ? 132 : 180;
     const pxPer = H / (top + bottom);
     const zero = top * pxPer;
     const px = (v: number) => (this.growth === 'growing' ? 0 : Math.max(0, v * pxPer - 1));

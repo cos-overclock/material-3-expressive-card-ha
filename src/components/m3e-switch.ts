@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { define } from './define';
 
@@ -85,12 +85,12 @@ export class M3eSwitch extends LitElement {
   private toggle(e: Event): void {
     e.stopPropagation();
     if (this.disabled) return;
-    this.checked = !this.checked;
-    this.dispatchEvent(new CustomEvent('change', { detail: { checked: this.checked }, bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent('change', { detail: { checked: !this.checked }, bubbles: true, composed: true }));
   }
 
   private down = (e: PointerEvent) => {
     e.stopPropagation();
+    if (this.disabled || e.button !== 0) return;
     this.pressed = true;
   };
   private up = () => {
@@ -101,7 +101,7 @@ export class M3eSwitch extends LitElement {
     return html`<button
       role="switch"
       aria-checked=${this.checked ? 'true' : 'false'}
-      aria-label=${this.label}
+      aria-label=${this.label || nothing}
       class=${this.pressed ? 'pressed' : ''}
       ?disabled=${this.disabled}
       @click=${this.toggle}
